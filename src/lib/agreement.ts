@@ -47,8 +47,12 @@ export async function fingerprint(a: Agreement): Promise<SignedAgreement> {
 }
 
 const sats = (n: number) => `${n.toLocaleString("en-US")} sats`;
-const usd = (n: number, rate: number | null) =>
-  rate ? ` (about ${((n / 1e8) * rate).toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 2 })})` : "";
+function usd(n: number, rate: number | null): string {
+  if (!rate) return "";
+  const v = (n / 1e8) * rate;
+  if (v > 0 && v < 0.01) return " (under $0.01)";
+  return ` (about ${v.toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 2 })})`;
+}
 
 /** Render and download the agreement (or, with a txid, the completed receipt) as a PDF. */
 export async function downloadAgreementPdf(a: SignedAgreement): Promise<void> {

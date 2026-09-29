@@ -24,8 +24,19 @@ interface Store {
 }
 
 // ---- In-memory store (dev / no DATABASE_URL). Survives HMR, not restarts.
+// Process-wide state lives on globalThis so it survives dev hot reloads; the store objects themselves
+// are rebuilt on each module load so new methods take effect (a cached instance would keep old code).
+type MemoryData = { rows: Message[]; seq: number; grants: Grant[] };
+const g = globalThis as unknown as { __ssMemory?: MemoryData; __ssSql?: postgres.Sql };
+
 class MemoryStore implements Store {
-  private grants: Grant[] = [];
+  private data: MemoryData = (g.__ssMemory ??= { rows: [], seq: 0, grants: [] });
+  private get rows() {
+    return this.data.rows;
+  }
+  private get grants() {
+    return this.data.grants;
+  }
   async addGrant(g: Grant) {
     const existing = this.grants.find((x) => x.txid === g.txid && x.room === g.room);
     if (existing) return existing.userId === g.userId;
@@ -36,10 +47,8 @@ class MemoryStore implements Store {
     const now = new Date().toISOString();
     return this.grants.find((g) => g.room === room && g.userId === userId && g.expiresAt > now) ?? null;
   }
-  private rows: Message[] = [];
-  private seq = 0;
   async add(m: Omit<Message, "id" | "createdAt">) {
-    const row = { ...m, id: ++this.seq, createdAt: new Date().toISOString() };
+    const row = { ...m, id: ++this.data.seq, createdAt: new Date().toISOString() };
     this.rows.push(row);
     return row;
   }
@@ -68,7 +77,7 @@ class PgStore implements Store {
   private sql: postgres.Sql;
   private ready: Promise<unknown>;
   constructor(url: string) {
-    this.sql = postgres(url, { max: 5, idle_timeout: 20 });
+    this.sql = g.__ssSql ??= postgres(url, { max: 5, idle_timeout: 20 });
     this.ready = this.sql`
       create table if not exists ss_messages (
         id bigserial primary key,
@@ -141,5 +150,4 @@ class PgStore implements Store {
   }
 }
 
-const g = globalThis as unknown as { __ssStore?: Store };
-export const store: Store = (g.__ssStore ??= process.env.DATABASE_URL ? new PgStore(process.env.DATABASE_URL) : new MemoryStore());
+export const store: Store = process.env.DATABASE_URL ? new PgStore(process.env.DATABASE_URL) : new MemoryStore();
