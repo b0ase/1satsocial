@@ -34,7 +34,10 @@ function traced(wallet: WalletInterface, log: object[]): WalletInterface {
           spends: args?.spends ? Object.keys(args.spends as object) : undefined,
           options: args?.options,
           labels: args?.labels,
-          inputShape: (args?.inputs as Record<string, unknown>[] | undefined)?.map((i) => Object.keys(i)),
+          inputShape: (args?.inputs as Record<string, unknown>[] | undefined)?.map((i) => ({
+            keys: Object.keys(i),
+            unlockingScriptLength: i.unlockingScriptLength,
+          })),
           originator: rest[0],
         };
         log.push(entry);
@@ -46,6 +49,31 @@ function traced(wallet: WalletInterface, log: object[]): WalletInterface {
           entry.error = String(e);
           throw e;
         }
+      };
+    },
+  });
+}
+
+// An OrdLock purchase unlock embeds every output after the payout, including the wallet's change.
+// The SDK sizes it for a bare transaction (1,402 bytes for v1), but Yours splits change across
+// ~8 outputs, pushing the real unlock to ~1,670 bytes, which the wallet rejects as oversized.
+// Declared lengths are an upper bound, so padding only raises the fee estimate slightly.
+const ORDLOCK_UNLOCK_MIN = 1_000;
+const CHANGE_HEADROOM_BYTES = 34 * 32;
+
+function withUnlockHeadroom(wallet: WalletInterface): WalletInterface {
+  return new Proxy(wallet, {
+    get(target, prop, receiver) {
+      const orig = Reflect.get(target, prop, receiver);
+      if (prop !== "createAction" || typeof orig !== "function") return orig;
+      return (args: Record<string, unknown>, ...rest: unknown[]) => {
+        const inputs = args?.inputs as { unlockingScriptLength?: number }[] | undefined;
+        const padded = inputs?.map((i) =>
+          (i.unlockingScriptLength ?? 0) >= ORDLOCK_UNLOCK_MIN
+            ? { ...i, unlockingScriptLength: i.unlockingScriptLength! + CHANGE_HEADROOM_BYTES }
+            : i,
+        );
+        return orig.call(target, padded ? { ...args, inputs: padded } : args, ...rest);
       };
     },
   });
@@ -125,7 +153,7 @@ export async function buyListing(req: BuyRequest): Promise<string> {
     const calls: object[] = [];
     const base = new OneSatServices("main");
     const services = req.chatOnly && req.kind === "bsv21" ? indexerValidatedServices(base) : base;
-    const ctx = createContext(traced(conn.wallet, calls), { services, chain: "main" });
+    const ctx = createContext(withUnlockHeadroom(traced(conn.wallet, calls)), { services, chain: "main" });
     const attempt = async (viaWalletModule: boolean): Promise<{ txid?: string; error?: string }> => {
       const route = viaWalletModule ? { usePermissionModule: true, permissionScheme: req.kind === "coll" ? "1sat" : "bsv21" } as const : {};
       try {
@@ -139,14 +167,14 @@ export async function buyListing(req: BuyRequest): Promise<string> {
       }
     };
 
-    // Default SDK route first. On Yours 5.1 an OrdLock v1 purchase can fail inside the wallet with
-    // "inputs[0].unlockScript parameter must be valid" even though the SDK's unlock verifies offline;
-    // in that case retry via the wallet's own 1Sat module, which builds the purchase itself.
-    let route = "sdk";
-    let result = await attempt(false);
-    if (result.error && /unlockScript parameter must be valid/i.test(result.error)) {
-      route = "wallet-module";
-      result = await attempt(true);
+    // Yours v5 builds OrdLock purchase unlocks itself through its 1Sat permission module; the plain
+    // SDK route fails inside Yours ("inputs[0].unlockScript parameter must be valid"). Use the module
+    // route first and fall back to the SDK route for wallets without the module.
+    let route = "wallet-module";
+    let result = await attempt(true);
+    if (result.error === "module-left-signable-transaction") {
+      route = "sdk";
+      result = await attempt(false);
     }
     report({ kind: "buy", provider: conn.provider, route, req, result: { txid: result.txid, error: result.error }, calls });
     if (result.error || !result.txid) throw new Error(friendly(result.error ?? "Purchase failed"));
