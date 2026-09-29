@@ -1,10 +1,12 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { NoWalletError, signIn, signOut } from "@/lib/wallet-client";
 
 type SessionInfo = { userId: string; name: string | null; wallet: string; addresses: number } | null;
+
+const WARNING_KEY = "ss_signin_warning";
 
 export function shortId(id: string) {
   return `${id.slice(0, 6)}…${id.slice(-4)}`;
@@ -20,7 +22,16 @@ export function useSignIn() {
     setError(null);
     setNoWallet(false);
     try {
-      await signIn(setStatus);
+      const result = (await signIn(setStatus)) as { warning?: string } | undefined;
+      if (result?.warning) {
+        setError(result.warning);
+        // The header swaps to the account menu after refresh; carry the notice across.
+        try {
+          sessionStorage.setItem(WARNING_KEY, result.warning);
+        } catch {
+          /* storage unavailable */
+        }
+      }
       router.refresh();
     } catch (e) {
       if (e instanceof NoWalletError) setNoWallet(true);
@@ -61,11 +72,39 @@ export function AccountButton({ session }: { session: SessionInfo }) {
   const router = useRouter();
   const { run, status } = useSignIn();
   const [open, setOpen] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  useEffect(() => {
+    let saved: string | null = null;
+    try {
+      saved = sessionStorage.getItem(WARNING_KEY);
+    } catch {
+      /* storage unavailable */
+    }
+    if (saved) queueMicrotask(() => setNotice(saved));
+  }, []);
+
+  function dismiss() {
+    setNotice(null);
+    try {
+      sessionStorage.removeItem(WARNING_KEY);
+    } catch {
+      /* storage unavailable */
+    }
+  }
 
   if (!session) return <ConnectPrompt />;
 
   return (
     <div className="relative">
+      {notice && (
+        <div role="status" className="fixed right-4 top-16 z-40 max-w-sm rounded-xl border border-yellow-900/70 bg-panel p-4 text-sm shadow-2xl">
+          <p className="text-yellow-100/90">{notice}</p>
+          <button onClick={dismiss} className="mt-2 text-xs text-muted underline hover:text-text">
+            Dismiss
+          </button>
+        </div>
+      )}
       <button
         onClick={() => setOpen((o) => !o)}
         className="flex items-center gap-2 rounded-full border border-line bg-panel px-3 py-1.5 text-sm hover:border-gold/50"

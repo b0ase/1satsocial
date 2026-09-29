@@ -54,7 +54,7 @@ async function submit(proof: LoginProof) {
   });
   const data = await res.json();
   if (!res.ok) throw new Error(data.error || "Sign-in failed");
-  return data as { userId: string; addresses: string[] };
+  return data as { userId: string; addresses: string[]; holdings?: number; warning?: string };
 }
 
 const log = (...args: unknown[]) => console.info("[1satsocial]", ...args);
@@ -66,7 +66,18 @@ const diag: Record<string, unknown> = {};
 async function assetDerivations(wallet: WalletInterface): Promise<{ derivations: Derivation[]; outpoints: string[] }> {
   const seen = new Map<string, Derivation>();
   const outpoints: string[] = [];
-  for (const basket of ASSET_BASKETS) {
+  for (const plain of ASSET_BASKETS) {
+    // HandCash's BRC-100 wallet only exposes inventory through permission-scoped baskets ("p 1sat all",
+    // "p bsv21 all"); Yours uses the plain names. Try plain first, then the scoped name if that fails or is empty.
+    const candidates = [plain, `p ${plain} all`];
+    let basket = candidates[0];
+    for (const b of candidates) {
+      const probe = await wallet.listOutputs({ basket: b, limit: 1 }).catch(() => null);
+      if (probe && probe.totalOutputs > 0) {
+        basket = b;
+        break;
+      }
+    }
     for (let offset = 0; offset < 5000 && seen.size < MAX_PROOF_KEYS; offset += 500) {
       let res;
       try {
@@ -157,6 +168,13 @@ async function loginBrc100(wallet: WalletInterface, identityKey: string, onStatu
     outputs: outpoints,
     diag,
   });
+  if (outpoints.length > 0 && !(result as { holdings?: number }).holdings && derivations.length === 0) {
+    // e.g. HandCash (beta): it lists items but not the key derivation that locks them, so we can't prove control yet.
+    return {
+      ...result,
+      warning: `Signed in, but your wallet didn't share which keys hold your ${outpoints.length} item(s), so we couldn't verify them yet. Yours Wallet works today; we're working with HandCash on support.`,
+    };
+  }
   log("verified addresses", result.addresses);
   return result;
 }
