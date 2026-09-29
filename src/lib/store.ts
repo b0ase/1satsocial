@@ -28,6 +28,7 @@ interface Store {
   /** Replace the user's verified holdings with the latest proof. */
   replaceHoldings(userId: string, rows: Omit<HoldingRow, "verifiedAt">[]): Promise<void>;
   holdingsFor(userId: string): Promise<HoldingRow[]>;
+  addHoldings(userId: string, rows: Omit<HoldingRow, "verifiedAt">[]): Promise<void>;
 }
 
 // ---- In-memory store (dev / no DATABASE_URL). Survives HMR, not restarts.
@@ -64,6 +65,11 @@ class MemoryStore implements Store {
   }
   async holdingsFor(userId: string) {
     return this.data.holdings?.get(userId) ?? [];
+  }
+  async addHoldings(userId: string, rows: Omit<HoldingRow, "verifiedAt">[]) {
+    const verifiedAt = new Date().toISOString();
+    const keep = (this.data.holdings?.get(userId) ?? []).filter((h) => !rows.some((r) => r.outpoint === h.outpoint));
+    (this.data.holdings ??= new Map()).set(userId, [...keep, ...rows.map((r) => ({ ...r, verifiedAt }))]);
   }
   async add(m: Omit<Message, "id" | "createdAt">) {
     const row = { ...m, id: ++this.data.seq, createdAt: new Date().toISOString() };
@@ -181,6 +187,16 @@ class PgStore implements Store {
           on conflict (user_id, outpoint) do nothing`;
       }
     });
+  }
+  async addHoldings(userId: string, rows: Omit<HoldingRow, "verifiedAt">[]) {
+    await this.ready;
+    for (const r of rows) {
+      await this.sql`
+        insert into ss_holdings (user_id, room, outpoint, amount, source)
+        values (${userId}, ${r.room}, ${r.outpoint}, ${r.amount}, ${r.source})
+        on conflict (user_id, outpoint) do update set room = excluded.room, amount = excluded.amount,
+          source = excluded.source, verified_at = now()`;
+    }
   }
   async holdingsFor(userId: string) {
     await this.ready;

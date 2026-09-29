@@ -3,7 +3,7 @@
 import { connectBrc100 } from "./wallet-connection";
 import { Utils, type WalletInterface, type WalletProtocol } from "@bsv/sdk";
 import type { YoursProviderType } from "yours-wallet-provider";
-import { LOGIN_KEY_ID, LOGIN_PROTOCOL, MAX_PROOF_KEYS, MAX_PROOF_OUTPUTS, type LoginProof } from "./login-shared";
+import { LOGIN_KEY_ID, LOGIN_PROTOCOL, MAX_PROOF_OUTPUTS, type LoginProof } from "./login-shared";
 
 declare global {
   interface Window {
@@ -62,10 +62,11 @@ const log = (...args: unknown[]) => console.info("[1satsocial]", ...args);
 // Sign-in diagnostics, sent to the server (kept in memory, dev only) to debug wallet formats.
 const diag: Record<string, unknown> = {};
 
-/** Collect the outputs this wallet holds in its 1Sat baskets, and the distinct keys that lock them. */
-async function assetDerivations(wallet: WalletInterface): Promise<{ derivations: Derivation[]; outpoints: string[] }> {
-  const seen = new Map<string, Derivation>();
-  const outpoints: string[] = [];
+type AssetOutput = { outpoint: string; derivation: Derivation | null };
+
+/** The outputs this wallet holds in its 1Sat baskets, with the key derivation that locks each (if the wallet says). */
+async function assetOutputs(wallet: WalletInterface): Promise<AssetOutput[]> {
+  const items: AssetOutput[] = [];
   for (const plain of ASSET_BASKETS) {
     // HandCash's BRC-100 wallet only exposes inventory through permission-scoped baskets ("p 1sat all",
     // "p bsv21 all"); Yours uses the plain names. Try plain first, then the scoped name if that fails or is empty.
@@ -78,105 +79,87 @@ async function assetDerivations(wallet: WalletInterface): Promise<{ derivations:
         break;
       }
     }
-    for (let offset = 0; offset < 5000 && seen.size < MAX_PROOF_KEYS; offset += 500) {
+    for (let offset = 0; offset < 5000; offset += 500) {
       let res;
       try {
-        res = await wallet.listOutputs({
-          basket,
-          include: "locking scripts",
-          includeCustomInstructions: true,
-          includeTags: true,
-          limit: 500,
-          offset,
-        });
+        res = await wallet.listOutputs({ basket, include: "locking scripts", includeCustomInstructions: true, limit: 500, offset });
       } catch (e) {
         log(`listOutputs(${basket}) failed`, e);
         diag[`basket:${basket}:error`] = String(e);
         break;
       }
       const { outputs, totalOutputs } = res;
-      let parsed = 0;
       for (const o of outputs) {
-        if (o.spendable !== false && o.outpoint) outpoints.push(o.outpoint);
+        if (o.spendable === false || !o.outpoint) continue;
+        let derivation: Derivation | null = null;
         const ci = await plaintextCi(wallet, o.customInstructions);
-        if (!ci) continue;
         try {
-          const d = JSON.parse(ci) as Partial<Derivation>;
-          if (!d.protocolID || !d.keyID) continue;
-          const deriv = { protocolID: d.protocolID, keyID: d.keyID, counterparty: d.counterparty ?? "self" };
-          seen.set(JSON.stringify(deriv), deriv);
-          parsed++;
+          const d = ci ? (JSON.parse(ci) as Partial<Derivation>) : null;
+          if (d?.protocolID && d.keyID) derivation = { protocolID: d.protocolID, keyID: d.keyID, counterparty: d.counterparty ?? "self" };
         } catch {
           /* not a derivation record */
         }
+        items.push({ outpoint: o.outpoint, derivation });
       }
-      // Diagnostics: the shape of what the wallet returns is not yet documented for this use.
-      diag[`basket:${basket}:${offset}`] = {
-        totalOutputs,
-        returned: outputs.length,
-        withDerivation: parsed,
-        samples: outputs.slice(0, 3).map((o) => ({
-          outpoint: o.outpoint,
-          satoshis: o.satoshis,
-          lockingScript: o.lockingScript?.slice(0, 80),
-          customInstructions: o.customInstructions?.slice(0, 200),
-          tags: o.tags?.slice(0, 8),
-        })),
-      };
-      log(`basket "${basket}"`, diag[`basket:${basket}:${offset}`]);
+      diag[`basket:${basket}:${offset}`] = { totalOutputs, returned: outputs.length, withDerivation: items.filter((i) => i.derivation).length };
       if (outputs.length < 500) break;
     }
   }
-  return { derivations: [...seen.values()].slice(0, MAX_PROOF_KEYS), outpoints: outpoints.slice(0, MAX_PROOF_OUTPUTS) };
+  return items;
 }
 
 async function loginBrc100(wallet: WalletInterface, identityKey: string, onStatus: (s: string) => void) {
-  onStatus("Finding your ordinals and tokens…");
-  const { derivations, outpoints } = await assetDerivations(wallet);
+  // One approval: the identity signature. Holdings are proved per room (proveRoom), one approval each, the first time.
   const message = await getChallenge();
-  const data = Utils.toArray(message, "utf8");
-
   onStatus("Approve the sign-in in Yours…");
   const { signature: idSig } = await wallet.createSignature({
-    data,
+    data: Utils.toArray(message, "utf8"),
     protocolID: LOGIN_PROTOCOL,
     keyID: LOGIN_KEY_ID,
     counterparty: "anyone",
   });
+  return submit({ kind: "brc100", message, identityKey, identitySig: Utils.toHex(idSig), keys: [] });
+}
 
-  const keys: { pubKey: string; sig: string }[] = [];
-  for (const [i, d] of derivations.entries()) {
-    onStatus(`Proving holdings (${i + 1}/${derivations.length})…`);
-    try {
-      const { publicKey } = await wallet.getPublicKey({ ...d, forSelf: true });
-      const { signature } = await wallet.createSignature({ ...d, data });
-      keys.push({ pubKey: publicKey, sig: Utils.toHex(signature) });
-    } catch (e) {
-      log("could not sign with", d, e);
-      diag[`sign-error:${d.protocolID[1]}:${d.keyID}`] = String(e);
-    }
-  }
+async function post(url: string, body: object) {
+  const res = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || "Request failed");
+  return data;
+}
 
-  diag.derivations = derivations;
-  onStatus("Verifying your holdings on-chain…");
-  const result = await submit({
-    kind: "brc100",
-    message,
-    identityKey,
-    identitySig: Utils.toHex(idSig),
-    keys,
-    outputs: outpoints,
-    diag,
-  });
-  if (outpoints.length > 0 && !(result as { holdings?: number }).holdings && derivations.length === 0) {
-    // e.g. HandCash (beta): it lists items but not the key derivation that locks them, so we can't prove control yet.
-    return {
-      ...result,
-      warning: `Signed in, but your wallet didn't share which keys hold your ${outpoints.length} item(s), so we couldn't verify them yet. Yours Wallet works today; we're working with HandCash on support.`,
-    };
+/**
+ * Prove you hold this room's asset: find its outputs in the wallet, then sign one challenge with the key that locks
+ * them (one wallet approval). The server checks the outputs on-chain and remembers them for later visits.
+ */
+export async function proveRoom(kind: string, id: string, onStatus: (s: string) => void = () => {}) {
+  const conn = await connectBrc100().catch(() => null);
+  if (!conn) throw new NoWalletError("No wallet found");
+  onStatus("Looking in your wallet…");
+  const items = (await assetOutputs(conn.wallet)).slice(-MAX_PROOF_OUTPUTS * 5);
+  const api = `/api/rooms/${kind}/${encodeURIComponent(id)}/prove`;
+
+  // Which of the wallet's outputs are this room's asset (the server checks the chain, in batches).
+  const matching = new Set<string>();
+  for (let i = 0; i < items.length && matching.size === 0; i += MAX_PROOF_OUTPUTS) {
+    const batch = items.slice(i, i + MAX_PROOF_OUTPUTS).map((o) => o.outpoint);
+    const { outpoints } = (await post(api, { outputs: batch })) as { outpoints: string[] };
+    outpoints.forEach((o) => matching.add(o.replace("_", ".")));
   }
-  log("verified addresses", result.addresses);
-  return result;
+  const norm = (o: string) => o.replace("_", ".");
+  const held = items.filter((o) => matching.has(norm(o.outpoint)));
+  if (!held.length) throw new Error("Your wallet doesn't hold this yet.");
+  const d = held.find((o) => o.derivation)?.derivation;
+  if (!d) throw new Error("Your wallet didn't say which key holds this, so it can't be proved yet. Yours Wallet works today.");
+
+  // Every output locked to that same key is proved by the one signature.
+  const sameKey = held.filter((o) => JSON.stringify(o.derivation) === JSON.stringify(d)).map((o) => o.outpoint);
+  const message = await getChallenge();
+  onStatus("Approve in Yours to prove you hold it…");
+  const { publicKey } = await conn.wallet.getPublicKey({ ...d, forSelf: true });
+  const { signature } = await conn.wallet.createSignature({ ...d, data: Utils.toArray(message, "utf8") });
+  onStatus("Checking on-chain…");
+  return post(api, { outputs: sameKey, message, pubKey: publicKey, sig: Utils.toHex(signature) });
 }
 
 async function loginLegacy(yours: YoursProviderType, onStatus: (s: string) => void) {

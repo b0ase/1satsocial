@@ -21,7 +21,7 @@ export default async function MyRoomsPage() {
           <h1 className="text-3xl font-semibold tracking-tight">My rooms</h1>
           <p className="mt-1 text-muted">Every room your wallet can enter right now.</p>
         </div>
-        {session && <RefreshHoldings />}
+        {session?.wallet === "legacy" && <RefreshHoldings />}
       </div>
 
       {!session ? (
@@ -49,8 +49,8 @@ async function RoomsList({ session }: { session: Session }) {
       <div className="rounded-2xl border border-dashed border-line p-8 text-center">
         <p className="font-medium">No rooms yet</p>
         <p className="mx-auto mt-2 max-w-md text-sm text-muted">
-          We didn&apos;t find any 1Sat tokens or collection items at your verified keys. Bought something just now? Choose
-          Refresh holdings. Otherwise, find something hot and buy in.
+          No proven holdings yet. Already hold a token or collection item? Open its room and choose &ldquo;I hold it: prove
+          it&rdquo; (one approval in Yours). Otherwise, find something hot and buy in.
         </p>
         <Link href="/" className="mt-5 inline-block rounded-full bg-gold px-5 py-2 text-sm font-medium text-black hover:brightness-110">
           See what&apos;s hot

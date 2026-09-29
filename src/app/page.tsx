@@ -78,7 +78,7 @@ async function LiveBoard({ session }: { session: Session | null }) {
 
 /** Signed-in users see the rooms they can walk into, first. */
 async function YourRooms({ session }: { session: Session }) {
-  const rooms = session.addresses.length ? await eligibleRooms(session) : [];
+  const rooms = await eligibleRooms(session);
   return (
     <section className="mt-10" aria-labelledby="your-rooms">
       <div className="mb-3 flex items-baseline justify-between gap-4">
@@ -86,7 +86,7 @@ async function YourRooms({ session }: { session: Session }) {
           Your rooms {rooms.length > 0 && <span className="text-gold">· {rooms.length}</span>}
         </h2>
         <Link href="/rooms" className="text-sm text-gold hover:underline">
-          {rooms.length ? "All my rooms →" : "Refresh holdings →"}
+          {rooms.length ? "All my rooms →" : "My rooms →"}
         </Link>
       </div>
       {rooms.length === 0 ? (

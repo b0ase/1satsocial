@@ -66,6 +66,29 @@ class Client {
   check("foreign outputs not credited", res.ok && body.holdings === 0, JSON.stringify(body));
 }
 
+// 1c. Per-room proof: the room finds the wallet's outputs for it, but only the key that locks them can prove them
+{
+  const c = new Client();
+  const wallet = new ProtoWallet(PrivateKey.fromRandom());
+  const { publicKey: identityKey } = await wallet.getPublicKey({ identityKey: true });
+  let message = await c.challenge();
+  const { signature: idSig } = await wallet.createSignature({ data: Utils.toArray(message, "utf8"), protocolID: [0, "1satsocial login"], keyID: "1", counterparty: "anyone" });
+  await c.verify({ kind: "brc100", message, identityKey, identitySig: Utils.toHex(idSig), keys: [] });
+  const PROVE = "/api/rooms/bsv21/429bf19906897c0444a53bdf236473b1b3965a95a03f20863de640f49241d929_0/prove";
+  // A real $BLASTER output held by someone else, plus an unrelated output.
+  const outputs = ["c7858a345194db0985bacdb41888a3ae54bca4ef24314c28c8b931e9a1088436_1", "938b41755b20b3191dadef4e1dbfb9e9b37abbe9d8f7eab9e067579caf4e109f_0"];
+  const m = await (await c.req(PROVE, { method: "POST", body: JSON.stringify({ outputs }) })).json();
+  check("prove: finds the room's outputs", m.outpoints?.length === 1 && m.outpoints[0] === outputs[0], JSON.stringify(m));
+  message = await c.challenge();
+  const d = { protocolID: [0, "onesat"], keyID: "1sat 0", counterparty: "self" };
+  const { publicKey } = await wallet.getPublicKey({ ...d, forSelf: true });
+  const { signature } = await wallet.createSignature({ ...d, data: Utils.toArray(message, "utf8") });
+  const r = await c.req(PROVE, { method: "POST", body: JSON.stringify({ outputs, message, pubKey: publicKey, sig: Utils.toHex(signature) }) });
+  check("prove: someone else's output not credited", r.status === 422, String(r.status));
+  const anon = await new Client().req(PROVE, { method: "POST", body: JSON.stringify({ outputs }) });
+  check("prove: needs a session", anon.status === 401);
+}
+
 // 2. Forged identity: sign with a different key
 {
   const c = new Client();

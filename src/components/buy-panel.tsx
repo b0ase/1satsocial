@@ -7,7 +7,7 @@ import { downloadAgreementPdf, type SignedAgreement } from "@/lib/agreement";
 import type { Listing } from "@/lib/market";
 import { formatUsd } from "@/lib/price";
 import type { RoomKind } from "@/lib/room-ref";
-import { signIn, walletBalance } from "@/lib/wallet-client";
+import { proveRoom, walletBalance } from "@/lib/wallet-client";
 
 // Headroom for network + overlay fees when judging whether a listing is affordable.
 const FEE_MARGIN_SATS = 5_000;
@@ -246,10 +246,10 @@ export function BuyPanel(props: {
       setReceipts((r) => [receipt, ...r]);
       setStatus(null);
 
-      // Re-prove holdings so the server sees the key the new token landed on. The purchase is already
-      // on-chain, so a failure here isn't fatal: Refresh holdings later picks the key up.
+      // Prove the key the new token landed on (one approval). The purchase is already on-chain, so a failure
+      // here isn't fatal: the claim below and "I hold it: prove it" on the room both still work.
       try {
-        await signIn(setStatus);
+        await proveRoom(props.kind, props.roomId, setStatus);
       } catch {
         /* receipt stands; access check below keeps running */
       }

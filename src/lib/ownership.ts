@@ -187,9 +187,13 @@ async function mapLimit<T, R>(items: T[], limit: number, fn: (t: T) => Promise<R
   return out;
 }
 
-/** Verify the outputs a wallet says it holds. Returns only those proven owned by `addresses`, unspent, and valid. */
-export async function verifyOutputs(addresses: string[], outpoints: string[]): Promise<Holding[]> {
-  const owned = new Set(addresses);
+/**
+ * Verify the outputs a wallet says it holds. Returns only those locked to `addresses`, unspent, and valid assets.
+ * `addresses: null` skips the lock check (used to find which of a wallet's outputs belong to a room before asking the
+ * wallet to prove the key). `room` limits the result to one room.
+ */
+export async function verifyOutputs(addresses: string[] | null, outpoints: string[], room?: string): Promise<Holding[]> {
+  const owned = addresses ? new Set(addresses) : null;
   const unique = [...new Set(outpoints.map((o) => o.replace(".", "_")))]
     .filter((o) => /^[0-9a-f]{64}_\d{1,6}$/.test(o))
     .slice(0, MAX_PROOF_OUTPUTS);
@@ -203,9 +207,10 @@ export async function verifyOutputs(addresses: string[], outpoints: string[]): P
     const [txid, v] = outpoint.split("_");
     const output = txs.get(txid)?.outputs[Number(v)];
     const addr = output ? p2pkhAddress(output.lockingScript) : null;
-    return !!addr && owned.has(addr);
+    return !!addr && (!owned || owned.has(addr));
   });
   const spent = await spentMany(locked);
+  const wantKind = room?.split(":")[0];
 
   const results = await mapLimit(locked, 6, async (outpoint): Promise<Holding | null> => {
     const [txid, v] = outpoint.split("_");
@@ -214,14 +219,15 @@ export async function verifyOutputs(addresses: string[], outpoints: string[]): P
 
     const token = bsv21Data(output.lockingScript, outpoint);
     if (token) {
-      const room = parseRoom("bsv21", token.id);
-      const source = room ? await bsv21Valid(token.id, outpoint) : null;
-      return room && source ? { room: room.key, outpoint, amount: token.amt.toString(), source } : null;
+      const ref = parseRoom("bsv21", token.id);
+      if (!ref || (room && ref.key !== room)) return null;
+      const source = await bsv21Valid(token.id, outpoint);
+      return source ? { room: ref.key, outpoint, amount: token.amt.toString(), source } : null;
     }
-    if (output.satoshis === 1) {
+    if (output.satoshis === 1 && (!wantKind || wantKind === "coll")) {
       const member = await collectionMember(outpoint);
-      const room = member ? parseRoom("coll", member.collectionId) : null;
-      return room && member ? { room: room.key, outpoint, amount: "1", source: member.source } : null;
+      const ref = member ? parseRoom("coll", member.collectionId) : null;
+      return ref && member && (!room || ref.key === room) ? { room: ref.key, outpoint, amount: "1", source: member.source } : null;
     }
     return null;
   });

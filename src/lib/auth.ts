@@ -3,7 +3,7 @@ import { verifySignedMessage } from "./bsm";
 import { LOGIN_KEY_ID, LOGIN_PROTOCOL, MAX_PROOF_KEYS, type LoginProof } from "./login-shared";
 import type { Session } from "./session";
 
-function verifyDer(pub: PublicKey, message: string, sigHex: string): boolean {
+export function verifyDer(pub: PublicKey, message: string, sigHex: string): boolean {
   try {
     return pub.verify(Utils.toArray(message, "utf8"), Signature.fromDER(sigHex, "hex"));
   } catch {

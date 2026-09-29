@@ -26,8 +26,10 @@ export async function POST(req: Request) {
   }
 
   // Per-output ownership proofs: keep only outputs locked to a proven key, unspent, and a valid asset.
+  // Sign-in normally proves only the identity (one wallet approval); holdings are proved per room via /prove and
+  // kept across sign-ins, so they're only replaced here when the client sent asset-key proofs.
   let holdings = 0;
-  if (proof.kind === "brc100" && Array.isArray(proof.outputs)) {
+  if (proof.kind === "brc100" && result.addresses.length > 0 && Array.isArray(proof.outputs)) {
     const rows = await verifyOutputs(result.addresses, proof.outputs.filter((o): o is string => typeof o === "string"));
     await store.replaceHoldings(result.userId, rows);
     holdings = rows.length;

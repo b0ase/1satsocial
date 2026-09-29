@@ -3,6 +3,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ConnectPrompt } from "@/components/account-button";
 import { ChatRoom } from "@/components/chat-room";
+import { ProveHolding } from "@/components/prove-holding";
 import { RoomAvatar } from "@/components/room-card";
 import { roomMeta } from "@/lib/indexer";
 import { BuyPanel } from "@/components/buy-panel";
@@ -92,8 +93,15 @@ export default async function RoomPage({ params }: PageProps<"/r/[kind]/[id]">) 
               ? `Hold ${title} to join. Buy in below with Yours Wallet, or connect if you already hold it.`
               : access.error
                 ? `We couldn't reach the indexer (${access.error}). Try again in a moment.`
-                : `None of your verified addresses hold ${title}. Buy in below and you'll be let straight in.`}
+                : session.wallet === "brc100"
+                  ? `Hold ${title}? Prove it with one approval in Yours. Or buy in below and you'll be let straight in.`
+                  : `None of your verified addresses hold ${title}. Buy in below and you'll be let straight in.`}
           </p>
+          {session?.wallet === "brc100" && !access.error && (
+            <div className="mb-8">
+              <ProveHolding kind={room.kind} id={room.id} />
+            </div>
+          )}
           <BuyPanel
             kind={room.kind}
             roomId={room.id}

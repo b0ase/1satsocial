@@ -119,7 +119,7 @@ export function AccountButton({ session }: { session: SessionInfo }) {
             {session.wallet === "brc100" ? "Yours v5" : "Yours (legacy)"}
           </p>
           <button onClick={run} disabled={!!status} className="w-full rounded-lg px-2 py-1.5 text-left hover:bg-panel-2">
-            {status ?? "Refresh holdings"}
+            {status ?? (session.wallet === "brc100" ? "Sign in again" : "Refresh holdings")}
           </button>
           <button
             onClick={async () => {
