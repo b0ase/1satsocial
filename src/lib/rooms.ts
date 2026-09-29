@@ -1,7 +1,6 @@
-import { collectionCount, fungibleBalances, formatAmount, heldCollections, roomMeta, type RoomMeta } from "./indexer";
-import { artUrl } from "./content";
+import { bsv21Balance, formatAmount, roomMeta, type RoomMeta } from "./indexer";
 import { spentMany } from "./ownership";
-import { parseRoom, roomFromKey, type RoomRef } from "./room-ref";
+import { roomFromKey, type RoomRef } from "./room-ref";
 import type { Session } from "./session";
 import { store } from "./store";
 
@@ -32,7 +31,7 @@ export async function checkAccess(session: Session | null, room: RoomRef, meta?:
   // 1. Outputs the user proved they own, re-checked for spends (selling the token ends access).
   const proven = (await provenHoldings(session, room.key)).get(room.key);
   if (proven) return { ok: true, holding: holdingLabel(room, proven, (meta ?? (await roomMeta(room.kind, room.id)))?.dec ?? 0) };
-  // 2. Legacy fallback: GorillaPool's address index (also covers older wallets without per-output proofs).
+  // 2. Token balance at the proven addresses (overlay): covers legacy-provider sign-ins and outputs not yet proved.
   const onChain = await checkHoldings(session, room, meta);
   if (onChain.ok) return onChain;
   // A verified purchase the indexers haven't caught up with yet (see /claim).
@@ -41,24 +40,12 @@ export async function checkAccess(session: Session | null, room: RoomRef, meta?:
   return onChain;
 }
 
+/** Balance at the session's proven addresses, from the overlay. Collections have no by-address lookup yet. */
 async function checkHoldings(session: Session, room: RoomRef, meta?: RoomMeta | null): Promise<Access> {
+  if (room.kind !== "bsv21") return { ok: false, holding: null };
   try {
-    if (room.kind === "coll") {
-      const counts = await Promise.all(session.addresses.map((a) => collectionCount(a, room.id)));
-      const n = counts.reduce((a, b) => a + b, 0);
-      return { ok: n > 0, holding: n > 0 ? `${n}${n >= 100 ? "+" : ""} item${n === 1 ? "" : "s"}` : null };
-    }
-    const balances = await Promise.all(session.addresses.map((a) => fungibleBalances(a)));
-    let total = BigInt(0);
-    let dec = meta?.dec ?? 0;
-    for (const list of balances) {
-      for (const h of list) {
-        if (h.kind === room.kind && h.key.toLowerCase() === room.id.toLowerCase()) {
-          total += h.amount;
-          dec = h.dec;
-        }
-      }
-    }
+    const total = await bsv21Balance(room.id, session.addresses);
+    const dec = (meta ?? (await roomMeta(room.kind, room.id)))?.dec ?? 0;
     return { ok: total > BigInt(0), holding: total > BigInt(0) ? formatAmount(total, dec) : null };
   } catch (e) {
     return { ok: false, holding: null, error: e instanceof Error ? e.message : "Indexer unavailable" };
@@ -76,7 +63,7 @@ export type EligibleRoom = RoomRef & {
 /** Every room the session's addresses qualify for. */
 export async function eligibleRooms(session: Session): Promise<EligibleRoom[]> {
   const out = new Map<string, EligibleRoom>();
-  // Proven holdings first (authoritative), then the legacy address index, then provisional grants.
+  // Proven holdings, then provisional grants from just-verified purchases.
   const proven = await provenHoldings(session);
   await Promise.all(
     [...proven].map(async ([key, amount]) => {
@@ -89,33 +76,6 @@ export async function eligibleRooms(session: Session): Promise<EligibleRoom[]> {
         image: meta?.image ?? null,
         holding: holdingLabel(ref, amount, meta?.dec ?? 0),
       });
-    }),
-  );
-  // Yours v5 (BRC-100) sessions list only proven holdings. The address-index scan is for legacy-provider sessions,
-  // whose single ordinals address is the proof.
-  const scan = session.wallet === "legacy" ? session.addresses : [];
-  const [fungibles, colls] = await Promise.all([
-    Promise.all(scan.map((a) => fungibleBalances(a).catch(() => []))),
-    Promise.all(scan.map((a) => heldCollections(a).catch(() => new Map<string, number>()))),
-  ]);
-  for (const h of fungibles.flat()) {
-    const ref = parseRoom(h.kind, h.key);
-    if (!ref || out.has(ref.key)) continue;
-    out.set(ref.key, {
-      ...ref,
-      title: `$${h.symbol.replace(/^\$/, "")}`,
-      image: artUrl(h.icon),
-      holding: formatAmount(h.amount, h.dec),
-    });
-  }
-  const collTotals = new Map<string, number>();
-  for (const m of colls) for (const [id, n] of m) collTotals.set(id, (collTotals.get(id) ?? 0) + n);
-  await Promise.all(
-    [...collTotals].slice(0, 40).map(async ([id, n]) => {
-      const ref = parseRoom("coll", id);
-      if (!ref || out.has(ref.key)) return; // proven holdings win
-      const meta = await roomMeta("coll", ref.id);
-      out.set(ref.key, { ...ref, title: meta?.title ?? `Collection ${id.slice(0, 8)}`, image: meta?.image ?? null, holding: `${n} item${n === 1 ? "" : "s"}` });
     }),
   );
   // Rooms unlocked by a just-verified purchase (instant access) that the indexers haven't caught up with.

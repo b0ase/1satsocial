@@ -172,7 +172,7 @@ function Spotlight({ rooms, usd, held }: { rooms: HotRoom[]; usd: number | null;
                 accent
               />
             )}
-            <Stat label="Recent trades" value={room.trades.toLocaleString("en-US")} />
+            <Stat label="Recent sales" value={room.trades.toLocaleString("en-US")} />
             <Stat label="New listings" value={room.newListings.toLocaleString("en-US")} />
             {room.holders ? (
               <Stat label="Holders" value={room.holders.toLocaleString("en-US")} />
@@ -295,7 +295,7 @@ function HotGrid({ rooms, usd, held }: { rooms: HotRoom[]; usd: number | null; h
           <h2 id="hot-heading" className="text-2xl font-semibold tracking-tight">
             Hot right now
           </h2>
-          <p className="mt-1 text-sm text-muted">Ranked by trades, fresh listings and chat. Updates every 30 seconds.</p>
+          <p className="mt-1 text-sm text-muted">Ranked by sales, fresh listings and chat. Updates every 30 seconds.</p>
         </div>
         <Link href="/market" className="shrink-0 text-sm text-gold hover:underline">
           Full market →
@@ -331,7 +331,7 @@ function HotGrid({ rooms, usd, held }: { rooms: HotRoom[]; usd: number | null; h
             <div className="p-3.5">
               <p className="truncate font-medium group-hover:text-gold">{r.title}</p>
               <p className="mt-0.5 truncate text-xs text-muted">
-                {KIND[r.kind]} · {r.trades} trades{r.newListings ? ` · ${r.newListings} new` : ""}
+                {KIND[r.kind]}{r.newListings ? ` · ${r.newListings} new listings` : ""}
               </p>
               {r.floorSats !== null && (
                 <p className="mt-2 text-sm tabular-nums">

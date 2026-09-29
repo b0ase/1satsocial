@@ -2,8 +2,7 @@
 // outputs it holds and the server checks each one from chain data:
 //   1. its locking script pays an address whose key the user just proved (signature at sign-in),
 //   2. it is unspent (1Sat API),
-//   3. it is the asset it claims to be: BSV-21 via the 1Sat overlay (GorillaPool as a labelled fallback for tokens
-//      the overlay hasn't indexed), collection items via their origin's MAP pointer to the collection (ORDFS) plus a
+//   3. it is the asset it claims to be: BSV-21 via the 1Sat overlay, collection items via their origin's MAP pointer to the collection (ORDFS) plus a
 //      Sigma signature from the same key as the collection's origin (so a copycat can't claim membership).
 import { Utils, type LockingScript } from "@bsv/sdk";
 import { Sigma } from "@1sat/templates";
@@ -12,10 +11,9 @@ import { MAX_PROOF_OUTPUTS } from "./login-shared";
 import { parseRoom } from "./room-ref";
 
 const ONESAT = process.env.ONESAT_API_URL || "https://api.1sat.app/1sat";
-const GP = process.env.ORDINALS_API_URL || "https://ordinals.gorillapool.io/api";
 
 // "sigma": collection item whose origin points at the collection and is signed by the collection's key.
-export type HoldingSource = "overlay" | "gorillapool" | "sigma";
+export type HoldingSource = "overlay" | "sigma";
 
 export type Holding = {
   room: string; // room key, e.g. "bsv21:<id>" or "coll:<id>"
@@ -97,12 +95,7 @@ export function bsv21Data(script: LockingScript, outpoint: string): { id: string
 
 export async function bsv21Valid(tokenId: string, outpoint: string): Promise<HoldingSource | null> {
   const overlay = await get(`${ONESAT}/bsv21/${tokenId}/outputs/${outpoint.replace("_", ".")}`).catch(() => null);
-  if (overlay?.ok) return "overlay";
-  // Not in the overlay (history never submitted there): accept GorillaPool's validation, labelled as such.
-  const gp = await get(`${GP}/bsv20/outpoint/${outpoint}`).catch(() => null);
-  if (!gp?.ok) return null;
-  const d = (await gp.json().catch(() => null)) as { id?: string; status?: number } | null;
-  return d?.id === tokenId && d.status === 1 ? "gorillapool" : null;
+  return overlay?.ok ? "overlay" : null;
 }
 
 type OrdfsMeta = { map?: { subType?: string; subTypeData?: string | { collectionId?: string } }; origin?: string };

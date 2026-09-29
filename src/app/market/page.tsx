@@ -2,7 +2,8 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { Suspense } from "react";
 import { RoomAvatar } from "@/components/room-card";
-import { roomMeta, trending, type Trending } from "@/lib/indexer";
+import { roomMeta } from "@/lib/indexer";
+import { listingActivity, type Activity } from "@/lib/listings";
 import { roomMarket } from "@/lib/market";
 import { parseRoom, roomFromKey, roomPath, type RoomKind } from "@/lib/room-ref";
 import { store, type RoomActivity } from "@/lib/store";
@@ -27,7 +28,7 @@ export default async function MarketPage({ searchParams }: PageProps<"/market">)
         <div>
           <h1 className="text-3xl font-semibold tracking-tight">Market</h1>
           <p className="mt-1 text-muted">
-            Trending rooms, ranked by recent 1sat.market trades and chat activity. Buy in with Yours and you&apos;re in the room.
+            Trending rooms, ranked by recent marketplace listings, sales and chat activity. Buy in with Yours and you&apos;re in the room.
           </p>
         </div>
         <nav className="flex gap-1 rounded-full border border-line bg-panel p-1 text-sm">
@@ -53,13 +54,13 @@ type Row = { kind: RoomKind; id: string; trades: number; chat: RoomActivity | nu
 
 async function MarketTable({ tab }: { tab: Tab }) {
   const [{ tokens, collections }, active] = await Promise.all([
-    trending(15).catch(() => ({ tokens: [] as Trending[], collections: [] as Trending[] })),
+    listingActivity(15).catch(() => ({ tokens: [] as Activity[], collections: [] as Activity[] })),
     store.activeRooms(100),
   ]);
 
   const rows = new Map<string, Row>();
   for (const t of [...tokens, ...collections]) {
-    rows.set(`${t.kind}:${t.id}`, { kind: t.kind, id: t.id, trades: t.trades, chat: null, score: t.trades });
+    rows.set(`${t.kind}:${t.id}`, { kind: t.kind, id: t.id, trades: t.listings, chat: null, score: t.listings });
   }
   for (const a of active) {
     const ref = roomFromKey(a.room);
@@ -94,7 +95,7 @@ async function MarketTable({ tab }: { tab: Tab }) {
       <div className="hidden grid-cols-[2rem_1fr_7rem_7rem_9rem_8rem_8rem] gap-4 border-b border-line bg-panel px-4 py-2.5 text-xs uppercase tracking-wide text-muted md:grid">
         <span>#</span>
         <span>Room</span>
-        <span className="text-right">Trades</span>
+        <span className="text-right">Activity</span>
         <span className="text-right">Holders</span>
         <span className="text-right">Floor</span>
         <span className="text-right">Chat</span>
@@ -117,7 +118,7 @@ async function MarketTable({ tab }: { tab: Tab }) {
                   </span>
                 </div>
                 <p className="truncate text-xs text-muted md:hidden">
-                  {r.trades} trades{r.floor ? ` · floor ${r.floor}` : ""}
+                  {r.trades} listings & sales{r.floor ? ` · floor ${r.floor}` : ""}
                   {r.chat ? ` · ${r.chat.members} chatting` : ""}
                 </p>
               </div>

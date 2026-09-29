@@ -453,7 +453,7 @@ function ListingAction(props: {
     );
   }
   if (!l.buyable) {
-    // BSV-20 ticks: the SDK has no purchase action for them.
+    // Not in the 1Sat overlay topic, so buyBsv21 would refuse it: send the buyer to 1sat.market.
     return (
       <a
         href={props.marketUrl}

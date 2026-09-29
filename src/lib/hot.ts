@@ -1,13 +1,13 @@
 // The live "hot board" behind the landing page: which rooms are hottest right now, and a ticker of
-// what's just been listed and sold. Built from real 1Sat marketplace data plus chat activity.
+// what's just been listed and sold. Built from 1sat-stack's market API plus chat activity.
 import { unstable_cache } from "next/cache";
-import { formatAmount, roomMeta, trending } from "./indexer";
+import { formatAmount, roomMeta } from "./indexer";
+import { recentListings, type RecentListing } from "./listings";
 import { roomMarket } from "./market";
 import { bsvUsd } from "./price";
 import { parseRoom, roomFromKey, type RoomKind, type RoomRef } from "./room-ref";
 import { store } from "./store";
 
-const GP = process.env.ORDINALS_API_URL || "https://ordinals.gorillapool.io/api";
 const ONESAT = process.env.ONESAT_API_URL || "https://api.1sat.app/1sat";
 
 export type HotRoom = {
@@ -38,14 +38,6 @@ export type TickerItem = {
 
 export type HotBoard = { rooms: HotRoom[]; ticker: TickerItem[]; usdPerBsv: number | null; updatedAt: string };
 
-type TokenRow = { outpoint: string; id?: string; tick?: string; sym?: string; amt: string; dec: number; price: string; height?: number | null };
-type OrdRow = {
-  outpoint: string;
-  height?: number | null;
-  data?: { list?: { price?: number } };
-  origin?: { data?: { map?: { name?: string; subTypeData?: { collectionId?: string } | string } } };
-};
-
 const g = globalThis as unknown as {
   __ssHot?: { value: HotBoard; expires: number };
   __ssHotPending?: Promise<HotBoard>;
@@ -57,15 +49,6 @@ function degraded(b: HotBoard) {
   return b.rooms.length === 0 || b.ticker.length === 0;
 }
 
-async function gp<T>(path: string): Promise<T | null> {
-  try {
-    const res = await fetch(`${GP}${path}`, { signal: AbortSignal.timeout(15_000), cache: "no-store" });
-    return res.ok ? ((await res.json()) as T) : null;
-  } catch {
-    return null;
-  }
-}
-
 async function tipHeight(): Promise<number | null> {
   try {
     const res = await fetch(`${ONESAT}/chaintracks/height`, { signal: AbortSignal.timeout(5_000), cache: "no-store" });
@@ -75,29 +58,16 @@ async function tipHeight(): Promise<number | null> {
   }
 }
 
-// BSV-21 only: BSV-20 (tick) tokens are no longer supported by current indexers.
-function tokenRef(r: TokenRow): RoomRef | null {
-  return r.id ? parseRoom("bsv21", r.id) : null;
-}
-
-function collectionId(r: OrdRow): string | null {
-  const std = r.origin?.data?.map?.subTypeData;
-  return typeof std === "object" && std?.collectionId ? std.collectionId : null;
-}
-
 async function build(): Promise<HotBoard> {
-  const [trend, active, tip, usd, newTok, newOrd, soldTok, soldOrd] = await Promise.all([
-    trending(12).catch(() => ({ tokens: [], collections: [] })),
+  const [newListings, sales, active, tip, usd] = await Promise.all([
+    recentListings("active").catch((): RecentListing[] => []),
+    recentListings("sale").catch((): RecentListing[] => []),
     store.activeRooms(100).catch(() => []),
     tipHeight(),
     bsvUsd(),
-    gp<TokenRow[]>(`/bsv20/market?sort=height&dir=desc&limit=40`),
-    gp<OrdRow[]>(`/market?sort=recent&dir=desc&limit=40`),
-    gp<TokenRow[]>(`/bsv20/market/sales?limit=25&dir=desc`),
-    gp<OrdRow[]>(`/market/sales?limit=25&dir=desc`),
   ]);
 
-  // Heat = recent trades + fresh listings + chat activity.
+  // Heat = fresh listings + chat activity.
   type Acc = { ref: RoomRef; trades: number; newListings: number; chatMembers: number; chatMessages: number };
   const rooms = new Map<string, Acc>();
   const touch = (ref: RoomRef | null) => {
@@ -106,18 +76,13 @@ async function build(): Promise<HotBoard> {
     if (!a) rooms.set(ref.key, (a = { ref, trades: 0, newListings: 0, chatMembers: 0, chatMessages: 0 }));
     return a;
   };
-  for (const t of [...trend.tokens, ...trend.collections]) {
-    const a = touch(parseRoom(t.kind, t.id));
-    if (a) a.trades += t.trades;
-  }
-  for (const r of newTok ?? []) {
-    const a = touch(tokenRef(r));
+  for (const l of newListings) {
+    const a = touch(parseRoom(l.kind, l.id));
     if (a) a.newListings++;
   }
-  for (const r of newOrd ?? []) {
-    const id = collectionId(r);
-    const a = id ? touch(parseRoom("coll", id)) : null;
-    if (a) a.newListings++;
+  for (const l of sales) {
+    const a = touch(parseRoom(l.kind, l.id));
+    if (a) a.trades++;
   }
   for (const c of active) {
     const a = touch(roomFromKey(c.room));
@@ -154,39 +119,15 @@ async function build(): Promise<HotBoard> {
 
   const ago = (h?: number | null) => (h && tip ? Math.max(0, (tip - h) * 10) : null);
   const ticker: TickerItem[] = [];
-  const pushToken = (r: TokenRow, event: TickerItem["event"]) => {
-    const ref = tokenRef(r);
-    if (!ref || !Number(r.price)) return;
-    const sym = (r.sym ?? r.tick ?? "").replace(/^\$/, "");
-    ticker.push({
-      key: `${event}:${r.outpoint}`,
-      event,
-      kind: ref.kind,
-      id: ref.id,
-      label: `${formatAmount(BigInt(r.amt), r.dec)} $${sym}`,
-      sats: Number(r.price),
-      minutesAgo: ago(r.height),
-    });
-  };
-  const pushOrd = (r: OrdRow, event: TickerItem["event"]) => {
-    const id = collectionId(r);
-    const price = r.data?.list?.price ?? 0;
-    const ref = id ? parseRoom("coll", id) : null;
-    if (!ref || !price) return;
-    ticker.push({
-      key: `${event}:${r.outpoint}`,
-      event,
-      kind: "coll",
-      id: ref.id,
-      label: r.origin?.data?.map?.name ?? "Collection item",
-      sats: price,
-      minutesAgo: ago(r.height),
-    });
-  };
-  (newTok ?? []).slice(0, 12).forEach((r) => pushToken(r, "listed"));
-  (newOrd ?? []).slice(0, 12).forEach((r) => pushOrd(r, "listed"));
-  (soldTok ?? []).slice(0, 10).forEach((r) => pushToken(r, "sold"));
-  (soldOrd ?? []).slice(0, 10).forEach((r) => pushOrd(r, "sold"));
+  for (const l of [...newListings.slice(0, 20), ...sales.slice(0, 10)]) {
+    let label = l.name ?? "Collection item";
+    if (l.kind === "bsv21" && l.amount) {
+      const meta = await roomMeta("bsv21", l.id);
+      if (!meta) continue;
+      label = `${formatAmount(BigInt(l.amount), meta.dec)} ${meta.title}`;
+    }
+    ticker.push({ key: `${l.event}:${l.outpoint}`, event: l.event, kind: l.kind, id: l.id, label, sats: l.priceSats, minutesAgo: ago(l.height) });
+  }
   // Newest first; unconfirmed ("just now") at the front.
   ticker.sort((a, b) => (a.minutesAgo ?? -1) - (b.minutesAgo ?? -1));
 
@@ -219,7 +160,7 @@ const sharedBoard = unstable_cache(
     if (degraded(b)) throw new Error("degraded hot board");
     return b;
   },
-  ["hot-board-v2"],
+  ["hot-board-v3"],
   { revalidate: 60 },
 );
 

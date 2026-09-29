@@ -6,17 +6,14 @@ const ONESAT = process.env.ONESAT_API_URL || "https://api.1sat.app/1sat";
 const get = (url: string) => fetch(url, { signal: AbortSignal.timeout(15_000), cache: "no-store" });
 
 export async function loadTx(txid: string): Promise<Transaction | null> {
-  for (const url of [`${ONESAT}/beef/${txid}/tx`, `https://junglebus.gorillapool.io/v1/transaction/get/${txid}/bin`]) {
-    const res = await get(url).catch(() => null);
-    if (!res?.ok) continue;
-    try {
-      const tx = Transaction.fromBinary(Array.from(new Uint8Array(await res.arrayBuffer())));
-      if (tx.id("hex") === txid) return tx;
-    } catch {
-      /* try the next source */
-    }
+  const res = await get(`${ONESAT}/beef/${txid}/tx`).catch(() => null);
+  if (!res?.ok) return null;
+  try {
+    const tx = Transaction.fromBinary(Array.from(new Uint8Array(await res.arrayBuffer())));
+    return tx.id("hex") === txid ? tx : null;
+  } catch {
+    return null;
   }
-  return null;
 }
 
 export function p2pkhAddress(script: LockingScript): string | null {
