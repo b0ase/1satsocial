@@ -1,6 +1,7 @@
 import { collectionCount, fungibleBalances, formatAmount, heldCollections, roomMeta, type RoomMeta } from "./indexer";
 import { parseRoom, type RoomRef } from "./room-ref";
 import type { Session } from "./session";
+import { store } from "./store";
 
 export * from "./room-ref";
 
@@ -9,6 +10,15 @@ export type Access = { ok: boolean; holding: string | null; error?: string };
 /** Does any of the session's proven addresses hold this room's token? */
 export async function checkAccess(session: Session | null, room: RoomRef, meta?: RoomMeta | null): Promise<Access> {
   if (!session) return { ok: false, holding: null };
+  const onChain = await checkHoldings(session, room, meta);
+  if (onChain.ok) return onChain;
+  // A verified purchase the indexers haven't caught up with yet (see /claim).
+  const grant = await store.activeGrant(room.key, session.userId).catch(() => null);
+  if (grant) return { ok: true, holding: `${grant.holding} · confirming` };
+  return onChain;
+}
+
+async function checkHoldings(session: Session, room: RoomRef, meta?: RoomMeta | null): Promise<Access> {
   try {
     if (room.kind === "coll") {
       const counts = await Promise.all(session.addresses.map((a) => collectionCount(a, room.id)));

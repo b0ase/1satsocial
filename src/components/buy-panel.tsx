@@ -1,7 +1,9 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import { ApprovalPanel, type Terms } from "@/components/approval-panel";
+import { downloadAgreementPdf, type SignedAgreement } from "@/lib/agreement";
 import type { Listing } from "@/lib/market";
 import { formatUsd } from "@/lib/price";
 import type { RoomKind } from "@/lib/room-ref";
@@ -24,6 +26,8 @@ type Receipt = {
   usd: string | null;
   chatOnly: boolean;
   at: string;
+  /** The terms the buyer approved; re-rendered with the txid as the receipt PDF. */
+  agreement?: SignedAgreement;
 };
 
 const RECEIPTS_KEY = "ss_receipts";
@@ -56,6 +60,8 @@ export function BuyPanel(props: {
   marketUrl: string;
   messagesApi: string;
   signedIn: boolean;
+  /** Session user id (identity key or ordinals address), recorded on the approval PDF. */
+  userId: string | null;
   /** USD per BSV for estimates; null if no price source was reachable. */
   usdPerBsv: number | null;
 }) {
@@ -70,15 +76,42 @@ export function BuyPanel(props: {
   const [receipts, setReceipts] = useState<Receipt[]>([]);
   const [waiting, setWaiting] = useState(false);
 
-  // Restore receipts for this room; keep waiting for access if a purchase is recent.
+  const claimApi = props.messagesApi.replace(/\/messages$/, "/claim");
+
+  // Instant access: the server verifies the purchase transaction itself instead of waiting for a block.
+  const claim = useCallback(
+    async (txid: string): Promise<boolean> => {
+      const res = await fetch(claimApi, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ txid }),
+      }).catch(() => null);
+      return !!res?.ok;
+    },
+    [claimApi],
+  );
+
+  // Restore receipts for this room. A recent purchase claims instant access, else keeps waiting for the indexer.
   useEffect(() => {
     const mine = loadReceipts().filter((r) => r.roomId === props.roomId);
     if (!mine.length) return;
-    queueMicrotask(() => {
+    let live = true;
+    queueMicrotask(async () => {
       setReceipts(mine);
-      if (Date.now() - Date.parse(mine[0].at) < ACCESS_POLL_FOR_MS) setWaiting(true);
+      const recent = mine.filter((r) => Date.now() - Date.parse(r.at) < 6 * 3_600_000);
+      if (!recent.length || !props.signedIn) return;
+      for (const r of recent) {
+        if (await claim(r.txid)) {
+          if (live) router.refresh();
+          return;
+        }
+      }
+      if (live) setWaiting(true);
     });
-  }, [props.roomId]);
+    return () => {
+      live = false;
+    };
+  }, [props.roomId, props.signedIn, claim, router]);
 
   // After a purchase, keep checking until the indexer sees it (usually the next block, ~10 min).
   useEffect(() => {
@@ -140,17 +173,53 @@ export function BuyPanel(props: {
   const limitSats = typeof balance === "number" ? balance : budgetSats;
   const affordable = (l: Listing) => limitSats === null || l.priceSats + FEE_MARGIN_SATS <= limitSats;
 
-  async function buy(l: Listing) {
-    const dollars = usd ? ` (about ${formatUsd(l.priceSats, usd)})` : "";
-    const chatOnlyWarning = l.chatOnly
-      ? "\n\nChat access only: GorillaPool verifies these are genuine tokens, but the 1Sat overlay that Yours relies on " +
-        "hasn't indexed their history. They'll get you into this room, but Yours may not show them or let you send or " +
-        "resell them until that history is indexed."
-      : "";
-    const ok = window.confirm(
-      `Buy ${l.label} for ${sats(l.priceSats)}${dollars}?${chatOnlyWarning}\n\nNetwork fees are added on top. You'll confirm the payment in Yours Wallet.`,
-    );
-    if (!ok) return;
+  const [pending, setPending] = useState<Listing | null>(null);
+
+  const loadTerms = useCallback(async (): Promise<Terms | { error: string }> => {
+    const l = pending;
+    if (!l) return { error: "Nothing to approve" };
+    const q = new URLSearchParams({
+      kind: props.kind,
+      id: props.roomId,
+      outpoint: l.outpoint,
+      label: l.label,
+      chatOnly: l.chatOnly ? "1" : "0",
+    });
+    const res = await fetch(`/api/listings/quote?${q}`);
+    const quote = await res.json();
+    if (!res.ok || quote.error) return { error: quote.error ?? "Couldn't price this listing" };
+    return {
+      kind: "purchase",
+      title: `Buy ${l.label}`,
+      site: window.location.host,
+      room: { name: props.title, kind: props.kind, id: props.roomId, url: window.location.href },
+      reference: {
+        Listing: quote.outpoint,
+        "Listing contract": `OrdLock ${quote.listingVersion}`,
+        [props.kind === "coll" ? "Collection" : "Token"]: props.roomId,
+        Validation: l.chatOnly ? "GorillaPool (not in the 1Sat overlay)" : "1Sat overlay",
+      },
+      receive: quote.receive,
+      lines: quote.lines,
+      estNetworkFeeSats: quote.estNetworkFeeSats,
+      totalSats: quote.totalSats,
+      usdPerBsv: usd,
+      walletPrompts: quote.walletPrompts,
+      warnings: quote.warnings,
+      terms: [
+        "The payment to the seller is fixed by the listing's on-chain contract; 1satsocial never holds your funds.",
+        "Your wallet shows the final transaction, including its exact network fee, before you sign it. If it differs from these terms, reject it in Yours.",
+        "Room access is granted while you hold the token and is checked against the chain; selling the token ends access.",
+      ],
+    };
+  }, [pending, props.kind, props.roomId, props.title, usd]);
+
+  function buy(l: Listing) {
+    setError(null);
+    setPending(l);
+  }
+
+  async function executeBuy(l: Listing, agreement: SignedAgreement) {
     setBusy(l.outpoint);
     setError(null);
     try {
@@ -171,6 +240,7 @@ export function BuyPanel(props: {
         usd: usd ? formatUsd(l.priceSats, usd) : null,
         chatOnly: l.chatOnly,
         at: new Date().toISOString(),
+        agreement,
       };
       saveReceipt(receipt);
       setReceipts((r) => [receipt, ...r]);
@@ -182,6 +252,17 @@ export function BuyPanel(props: {
         await signIn(setStatus);
       } catch {
         /* receipt stands; access check below keeps running */
+      }
+
+      // Instant access from the transaction itself; the broadcaster can take a moment to report it.
+      setStatus("Verifying your purchase on the network…");
+      for (let i = 0; i < 6; i++) {
+        if (await claim(id)) {
+          setStatus("You're in.");
+          router.refresh();
+          return;
+        }
+        await new Promise((r) => setTimeout(r, 2_000));
       }
       setStatus(null);
       setWaiting(true);
@@ -195,6 +276,19 @@ export function BuyPanel(props: {
 
   return (
     <div className="w-full max-w-2xl text-left">
+      {pending && (
+        <ApprovalPanel
+          loadTerms={loadTerms}
+          approver={props.userId}
+          approveLabel="Approve & open Yours"
+          onClose={() => setPending(null)}
+          onApprove={(signed) => {
+            const l = pending;
+            setPending(null);
+            void executeBuy(l, signed);
+          }}
+        />
+      )}
       {receipts.map((r) => (
         <div key={r.txid} className="mb-4 rounded-xl border border-gold/40 bg-gold-soft p-4 text-sm">
           <div className="flex items-center justify-between gap-3">
@@ -207,7 +301,7 @@ export function BuyPanel(props: {
           </p>
           <p className="mt-2 text-muted">
             {waiting
-              ? "Waiting for the next block (usually about 10 minutes). You'll be let in automatically. You can leave this page open."
+              ? "We couldn't verify it instantly, so we're waiting for the next block (usually about 10 minutes). You'll be let in automatically."
               : "If the room hasn't opened yet, choose Refresh holdings in the account menu."}
             {r.chatOnly && " These are chat-access tokens, so Yours may not show them yet."}
           </p>
@@ -219,6 +313,14 @@ export function BuyPanel(props: {
           >
             Receipt on-chain: {r.txid}
           </a>
+          {r.agreement && (
+            <button
+              onClick={() => downloadAgreementPdf({ ...r.agreement!, txid: r.txid })}
+              className="mt-2 block rounded-full border border-gold/50 px-3 py-1 text-xs text-gold hover:bg-gold-soft"
+            >
+              Download receipt (PDF)
+            </button>
+          )}
         </div>
       ))}
 

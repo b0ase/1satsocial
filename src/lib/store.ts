@@ -11,14 +11,31 @@ export type Message = {
 
 export type RoomActivity = { room: string; messages: number; members: number; lastAt: string };
 
+/** Provisional room access from a verified-but-unconfirmed purchase, until the indexers catch up. */
+export type Grant = { room: string; userId: string; txid: string; holding: string; expiresAt: string };
+
 interface Store {
   add(m: Omit<Message, "id" | "createdAt">): Promise<Message>;
   list(room: string, opts: { after?: number; limit?: number }): Promise<Message[]>;
   activeRooms(limit: number): Promise<RoomActivity[]>;
+  /** False if this transaction has already been claimed for the room (by anyone). */
+  addGrant(g: Grant): Promise<boolean>;
+  activeGrant(room: string, userId: string): Promise<Grant | null>;
 }
 
 // ---- In-memory store (dev / no DATABASE_URL). Survives HMR, not restarts.
 class MemoryStore implements Store {
+  private grants: Grant[] = [];
+  async addGrant(g: Grant) {
+    const existing = this.grants.find((x) => x.txid === g.txid && x.room === g.room);
+    if (existing) return existing.userId === g.userId;
+    this.grants.unshift(g);
+    return true;
+  }
+  async activeGrant(room: string, userId: string) {
+    const now = new Date().toISOString();
+    return this.grants.find((g) => g.room === room && g.userId === userId && g.expiresAt > now) ?? null;
+  }
   private rows: Message[] = [];
   private seq = 0;
   async add(m: Omit<Message, "id" | "createdAt">) {
@@ -60,7 +77,18 @@ class PgStore implements Store {
         name text,
         body text not null,
         created_at timestamptz not null default now()
-      )`.then(() => this.sql`create index if not exists ss_messages_room_id on ss_messages (room, id)`);
+      )`.then(() => this.sql`create index if not exists ss_messages_room_id on ss_messages (room, id)`)
+      .then(
+        () => this.sql`
+          create table if not exists ss_grants (
+            room text not null,
+            user_id text not null,
+            txid text not null,
+            holding text not null,
+            expires_at timestamptz not null,
+            primary key (room, txid)
+          )`,
+      );
   }
   private map = (r: postgres.Row): Message => ({
     id: Number(r.id),
@@ -84,6 +112,24 @@ class PgStore implements Store {
         ? await this.sql`select * from (select * from ss_messages where room = ${room} order by id desc limit ${limit}) t order by id`
         : await this.sql`select * from ss_messages where room = ${room} and id > ${after} order by id limit ${limit}`;
     return rows.map(this.map);
+  }
+  async addGrant(g: Grant) {
+    await this.ready;
+    await this.sql`
+      insert into ss_grants (room, user_id, txid, holding, expires_at)
+      values (${g.room}, ${g.userId}, ${g.txid}, ${g.holding}, ${g.expiresAt})
+      on conflict (room, txid) do nothing`;
+    const [row] = await this.sql`select user_id from ss_grants where room = ${g.room} and txid = ${g.txid}`;
+    return row?.user_id === g.userId;
+  }
+  async activeGrant(room: string, userId: string) {
+    await this.ready;
+    const [r] = await this.sql`
+      select * from ss_grants where room = ${room} and user_id = ${userId} and expires_at > now()
+      order by expires_at desc limit 1`;
+    return r
+      ? { room: r.room, userId: r.user_id, txid: r.txid, holding: r.holding, expiresAt: new Date(r.expires_at).toISOString() }
+      : null;
   }
   async activeRooms(limit: number) {
     await this.ready;

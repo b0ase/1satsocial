@@ -86,6 +86,7 @@ export default async function RoomPage({ params }: PageProps<"/r/[kind]/[id]">) 
             marketUrl={marketUrl(room)}
             messagesApi={`/api/rooms/${room.kind}/${encodeURIComponent(room.id)}/messages`}
             signedIn={!!session}
+            userId={session?.userId ?? null}
             usdPerBsv={usdPerBsv}
           />
           <div className="mt-8 flex items-center gap-3 text-sm">
