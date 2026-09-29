@@ -7,6 +7,7 @@ import { RoomAvatar } from "@/components/room-card";
 import { roomMeta } from "@/lib/indexer";
 import { BuyPanel } from "@/components/buy-panel";
 import { marketUrl, roomMarket } from "@/lib/market";
+import { bsvUsd } from "@/lib/price";
 import { checkAccess, parseRoom } from "@/lib/rooms";
 import { getSession } from "@/lib/session";
 import { store } from "@/lib/store";
@@ -76,6 +77,7 @@ export default async function RoomPage({ params }: PageProps<"/r/[kind]/[id]">) 
             marketUrl={marketUrl(room)}
             messagesApi={`/api/rooms/${room.kind}/${encodeURIComponent(room.id)}/messages`}
             signedIn={!!session}
+            usdPerBsv={await bsvUsd()}
           />
           <div className="mt-8 flex items-center gap-3 text-sm">
             {!session ? (

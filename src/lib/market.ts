@@ -15,7 +15,20 @@ export type Listing = {
   seller: string;
   /** Can be bought in-app with the 1Sat SDK. */
   buyable: boolean;
+  /** Identical lots (same amount, price, buyability) collapsed into this row. */
+  count: number;
 };
+
+/** Collapse identical lots so the list shows distinct options ("×3"). */
+function collapse(listings: Listing[]): Listing[] {
+  const out: Listing[] = [];
+  for (const l of listings) {
+    const same = out.find((o) => o.label === l.label && o.priceSats === l.priceSats && o.buyable === l.buyable);
+    if (same) same.count++;
+    else out.push({ ...l, count: 1 });
+  }
+  return out;
+}
 
 export type RoomMarket = { listings: Listing[]; floorLabel: string | null };
 
@@ -80,16 +93,20 @@ async function loadMarket(room: RoomRef, limit: number): Promise<RoomMarket> {
         image: null,
         seller: r.owner,
         buyable: valid.has(r.outpoint),
+        count: 1,
       };
     });
-    // Buyable first, cheapest first within each group.
-    listings.sort((a, b) => Number(b.buyable) - Number(a.buyable) || a.priceSats - b.priceSats);
+    // Cheapest first, but always include the cheapest few that can be bought in-app.
+    listings.sort((a, b) => a.priceSats - b.priceSats);
+    const distinct = collapse(listings);
+    const picked = distinct.slice(0, limit);
+    for (const l of distinct.filter((x) => x.buyable).slice(0, 3)) if (!picked.includes(l)) picked.push(l);
     // The indexer's pricePer is rounded to whole sats; compute the real per-token price.
     const perToken = (r: TokenListing) => Number(r.price) / (Number(r.amt) / 10 ** r.dec);
     const floorRows = [...byPerToken.filter(sane), ...rows];
     const floor = floorRows.length ? Math.min(...floorRows.map(perToken)) : null;
     return {
-      listings: listings.slice(0, limit),
+      listings: picked,
       floorLabel: floor === null ? null : `${formatPerToken(floor)} / token`,
     };
   }
@@ -111,6 +128,7 @@ async function loadMarket(room: RoomRef, limit: number): Promise<RoomMarket> {
             : null,
         seller: r.owner,
         buyable: true,
+        count: 1,
       }),
     )
     .sort((a, b) => a.priceSats - b.priceSats);
