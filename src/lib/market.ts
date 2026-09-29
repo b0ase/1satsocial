@@ -62,7 +62,7 @@ async function loadMarket(room: RoomRef, limit: number): Promise<RoomMarket> {
     const filter = room.kind === "bsv21" ? `id=${room.id}` : `tick=${encodeURIComponent(room.id)}`;
     // Cheapest total price = cheapest way into the room; the per-token floor is fetched separately.
     const [byPrice, byPerToken] = await Promise.all([
-      get<TokenListing[]>(`${GP}/bsv20/market?${filter}&sort=price&dir=asc&limit=30`),
+      get<TokenListing[]>(`${GP}/bsv20/market?${filter}&sort=price&dir=asc&limit=80`),
       get<TokenListing[]>(`${GP}/bsv20/market?${filter}&sort=price_per_token&dir=asc&limit=5`).catch(() => []),
     ]);
     const sane = (r: TokenListing, i: number, all: TokenListing[]) =>
@@ -118,7 +118,7 @@ async function loadMarket(room: RoomRef, limit: number): Promise<RoomMarket> {
 }
 
 /** Cheapest listings for a room. Cached 60s. */
-export async function roomMarket(room: RoomRef, limit = 6): Promise<RoomMarket> {
+export async function roomMarket(room: RoomRef, limit = 8): Promise<RoomMarket> {
   const key = `${room.key}:${limit}`;
   const hit = cache.get(key);
   if (hit && hit.expires > Date.now()) return hit.value;

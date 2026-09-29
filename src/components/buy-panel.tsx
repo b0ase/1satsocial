@@ -1,10 +1,13 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { Listing } from "@/lib/market";
 import type { RoomKind } from "@/lib/room-ref";
-import { signIn } from "@/lib/wallet-client";
+import { signIn, walletBalance } from "@/lib/wallet-client";
+
+// Headroom for network + overlay fees when judging whether a listing is affordable.
+const FEE_MARGIN_SATS = 5_000;
 
 function sats(n: number) {
   if (n === 1) return "1 sat";
@@ -21,12 +24,33 @@ export function BuyPanel(props: {
   floorLabel: string | null;
   marketUrl: string;
   messagesApi: string;
+  signedIn: boolean;
 }) {
   const router = useRouter();
   const [busy, setBusy] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [txid, setTxid] = useState<string | null>(null);
+  const [balance, setBalance] = useState<number | null | "loading">(props.signedIn ? "loading" : null);
+
+  async function loadBalance() {
+    setBalance("loading");
+    setBalance(await walletBalance().catch(() => null));
+  }
+
+  // Signed-in users have already connected Yours to this site, so this shouldn't prompt a new connection.
+  useEffect(() => {
+    if (!props.signedIn) return;
+    let live = true;
+    walletBalance()
+      .catch(() => null)
+      .then((b) => live && setBalance(b));
+    return () => {
+      live = false;
+    };
+  }, [props.signedIn]);
+
+  const affordable = (l: Listing) => typeof balance !== "number" || l.priceSats + FEE_MARGIN_SATS <= balance;
 
   async function buy(l: Listing) {
     const ok = window.confirm(`Buy ${l.label} for ${sats(l.priceSats)}?\n\nYou'll confirm the payment in Yours Wallet.`);
@@ -67,6 +91,19 @@ export function BuyPanel(props: {
         <h3 className="font-medium">Cheapest ways in</h3>
         {props.floorLabel && <span className="text-sm text-muted">Floor {props.floorLabel}</span>}
       </div>
+      <p className="mb-3 text-sm text-muted">
+        {balance === "loading" ? (
+          "Checking your wallet balance…"
+        ) : typeof balance === "number" ? (
+          <>
+            Your wallet: <span className="text-text">{sats(balance)}</span>
+          </>
+        ) : (
+          <button onClick={loadBalance} className="underline hover:text-text">
+            Check what I can afford
+          </button>
+        )}
+      </p>
 
       {props.listings.length === 0 ? (
         <p className="rounded-xl border border-dashed border-line p-4 text-sm text-muted">
@@ -87,24 +124,13 @@ export function BuyPanel(props: {
                 <p className="truncate text-sm font-medium">{l.label}</p>
                 <p className="text-sm text-gold">{sats(l.priceSats)}</p>
               </div>
-              {l.buyable ? (
-                <button
-                  onClick={() => buy(l)}
-                  disabled={!!busy}
-                  className="shrink-0 rounded-full bg-gold px-4 py-1.5 text-sm font-medium text-black transition hover:brightness-110 disabled:opacity-50"
-                >
-                  {busy === l.outpoint ? "Buying…" : "Buy & enter"}
-                </button>
-              ) : (
-                <a
-                  href={props.marketUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="shrink-0 rounded-full border border-line px-4 py-1.5 text-sm text-muted hover:text-text"
-                >
-                  On 1sat.market
-                </a>
-              )}
+              <ListingAction
+                listing={l}
+                affordable={affordable(l)}
+                busy={busy}
+                marketUrl={props.marketUrl}
+                onBuy={() => buy(l)}
+              />
             </li>
           ))}
         </ul>
@@ -124,5 +150,46 @@ export function BuyPanel(props: {
         Purchases are paid from your Yours Wallet and settle on-chain. Prices are set by sellers on the 1Sat orderbook.
       </p>
     </div>
+  );
+}
+
+function ListingAction(props: {
+  listing: Listing;
+  affordable: boolean;
+  busy: string | null;
+  marketUrl: string;
+  onBuy: () => void;
+}) {
+  const { listing: l, affordable } = props;
+  const base = "shrink-0 rounded-full px-4 py-1.5 text-sm transition";
+  if (!affordable) {
+    return (
+      <span className={`${base} cursor-not-allowed border border-line text-muted/60`} title="More than your wallet balance">
+        Not enough BSV
+      </span>
+    );
+  }
+  if (!l.buyable) {
+    // The 1Sat overlay doesn't track this listing, so the SDK can't buy it safely in-app.
+    return (
+      <a
+        href={props.marketUrl}
+        target="_blank"
+        rel="noreferrer"
+        title="This listing can't be bought in-app"
+        className={`${base} border border-gold/50 text-gold hover:bg-gold-soft`}
+      >
+        Buy on 1sat.market ↗
+      </a>
+    );
+  }
+  return (
+    <button
+      onClick={props.onBuy}
+      disabled={!!props.busy}
+      className={`${base} bg-gold font-medium text-black hover:brightness-110 disabled:opacity-50`}
+    >
+      {props.busy === l.outpoint ? "Buying…" : "Buy & enter"}
+    </button>
   );
 }

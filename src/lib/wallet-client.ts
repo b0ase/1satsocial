@@ -189,3 +189,30 @@ export async function signIn(onStatus: (s: string) => void = () => {}) {
 export async function signOut() {
   await fetch("/api/auth/logout", { method: "POST" });
 }
+
+/**
+ * Spendable wallet balance in sats, or null if the wallet won't say.
+ * Yours v5 (BRC-100) has no balance call, so this sums the default basket; wallets may refuse that.
+ */
+export async function walletBalance(): Promise<number | null> {
+  const conn = await connectWallet().catch(() => null);
+  if (conn) {
+    try {
+      let total = 0;
+      for (let offset = 0; offset < 20_000; offset += 1000) {
+        const { outputs } = await conn.wallet.listOutputs({ basket: "default", limit: 1000, offset });
+        total += outputs.filter((o) => o.spendable).reduce((sum, o) => sum + o.satoshis, 0);
+        if (outputs.length < 1000) break;
+      }
+      return total;
+    } catch (e) {
+      log("wallet would not share its balance", e);
+      return null;
+    }
+  }
+  if (window.yours?.isReady) {
+    const b = await window.yours.getBalance().catch(() => undefined);
+    return b?.satoshis ?? null;
+  }
+  return null;
+}
