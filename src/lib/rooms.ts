@@ -1,6 +1,6 @@
 import { collectionCount, fungibleBalances, formatAmount, heldCollections, roomMeta, type RoomMeta } from "./indexer";
 import { artUrl } from "./content";
-import { isSpent } from "./ownership";
+import { spentMany } from "./ownership";
 import { parseRoom, roomFromKey, type RoomRef } from "./room-ref";
 import type { Session } from "./session";
 import { store } from "./store";
@@ -9,11 +9,11 @@ export * from "./room-ref";
 
 export type Access = { ok: boolean; holding: string | null; error?: string };
 
-/** Does any of the session's proven addresses hold this room's token? */
 /** The user's proven holdings (per-output proofs from sign-in) that are still unspent, grouped by room. */
 async function provenHoldings(session: Session): Promise<Map<string, bigint>> {
   const rows = await store.holdingsFor(session.userId).catch(() => []);
-  const live = await Promise.all(rows.map(async (r) => ((await isSpent(r.outpoint)) ? null : r)));
+  const spent = await spentMany(rows.map((r) => r.outpoint));
+  const live = rows.filter((r) => !spent.get(r.outpoint));
   const byRoom = new Map<string, bigint>();
   for (const r of live) if (r) byRoom.set(r.room, (byRoom.get(r.room) ?? BigInt(0)) + BigInt(r.amount));
   return byRoom;

@@ -42,6 +42,40 @@ export async function isSpent(outpoint: string): Promise<boolean> {
   return spent;
 }
 
+/** Spend status for many outputs in one request (1sat-stack POST /txo/spends). Fills the same 60s cache. */
+export async function spentMany(outpoints: string[]): Promise<Map<string, boolean>> {
+  const out = new Map<string, boolean>();
+  const todo: string[] = [];
+  for (const op of outpoints) {
+    const hit = spentCache.get(op);
+    if (hit && hit.expires > Date.now()) out.set(op, hit.spent);
+    else todo.push(op);
+  }
+  for (let i = 0; i < todo.length; i += 100) {
+    const batch = todo.slice(i, i + 100);
+    try {
+      const res = await fetch(`${ONESAT}/txo/spends`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(batch.map((o) => o.replace("_", "."))),
+        signal: AbortSignal.timeout(12_000),
+        cache: "no-store",
+      });
+      if (!res.ok) throw new Error(String(res.status));
+      const rows = (await res.json()) as { spendTxid?: string | null }[];
+      batch.forEach((op, k) => {
+        const spent = !!rows[k]?.spendTxid;
+        spentCache.set(op, { spent, expires: Date.now() + 60_000 });
+        out.set(op, spent);
+      });
+    } catch {
+      // Bulk route unavailable: fall back to one request per output.
+      await mapLimit(batch, 6, async (op) => out.set(op, await isSpent(op)));
+    }
+  }
+  return out;
+}
+
 /** BSV-21 inscription on an output: a transfer, or the deploy+mint output itself (whose id is its own outpoint). */
 function bsv21Data(script: LockingScript, outpoint: string): { id: string; amt: bigint } | null {
   for (const chunk of script.chunks) {
@@ -111,13 +145,19 @@ export async function verifyOutputs(addresses: string[], outpoints: string[]): P
   const txids = [...new Set(unique.map((o) => o.split("_")[0]))];
   const txs = new Map((await mapLimit(txids, 6, async (t) => [t, await loadTx(t)] as const)).filter(([, tx]) => tx));
 
-  const results = await mapLimit(unique, 6, async (outpoint): Promise<Holding | null> => {
+  // Keep only outputs locked to a key the user proved, then check their spend status in one bulk request.
+  const locked = unique.filter((outpoint) => {
     const [txid, v] = outpoint.split("_");
     const output = txs.get(txid)?.outputs[Number(v)];
-    if (!output) return null;
-    const addr = p2pkhAddress(output.lockingScript);
-    if (!addr || !owned.has(addr)) return null; // not locked to a key the user proved
-    if (await isSpent(outpoint)) return null;
+    const addr = output ? p2pkhAddress(output.lockingScript) : null;
+    return !!addr && owned.has(addr);
+  });
+  const spent = await spentMany(locked);
+
+  const results = await mapLimit(locked, 6, async (outpoint): Promise<Holding | null> => {
+    const [txid, v] = outpoint.split("_");
+    const output = txs.get(txid)!.outputs[Number(v)];
+    if (spent.get(outpoint)) return null;
 
     const token = bsv21Data(output.lockingScript, outpoint);
     if (token) {
