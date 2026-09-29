@@ -77,7 +77,7 @@ class PgStore implements Store {
   private sql: postgres.Sql;
   private ready: Promise<unknown>;
   constructor(url: string) {
-    this.sql = g.__ssSql ??= postgres(url, { max: 5, idle_timeout: 20 });
+    this.sql = g.__ssSql ??= postgres(url, { max: 5, idle_timeout: 20, onnotice: () => {} });
     this.ready = this.sql`
       create table if not exists ss_messages (
         id bigserial primary key,
