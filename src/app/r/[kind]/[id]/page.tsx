@@ -6,6 +6,8 @@ import { ChatRoom } from "@/components/chat-room";
 import { RoomAvatar } from "@/components/room-card";
 import { roomMeta } from "@/lib/indexer";
 import { BuyPanel } from "@/components/buy-panel";
+import { IndexingFund } from "@/components/indexing-fund";
+import { tokenIndexing } from "@/lib/overlay";
 import { marketUrl, roomMarket } from "@/lib/market";
 import { bsvUsd } from "@/lib/price";
 import { checkAccess, parseRoom } from "@/lib/rooms";
@@ -24,7 +26,12 @@ export default async function RoomPage({ params }: PageProps<"/r/[kind]/[id]">) 
   const room = parseRoom(kind, id);
   if (!room) notFound();
 
-  const [session, meta] = await Promise.all([getSession(), roomMeta(room.kind, room.id)]);
+  const [session, meta, indexing, usdPerBsv] = await Promise.all([
+    getSession(),
+    roomMeta(room.kind, room.id),
+    room.kind === "bsv21" ? tokenIndexing(room.id) : null,
+    bsvUsd(),
+  ]);
   const access = await checkAccess(session, room, meta);
   const title = meta?.title ?? room.id.slice(0, 12);
 
@@ -45,6 +52,8 @@ export default async function RoomPage({ params }: PageProps<"/r/[kind]/[id]">) 
           </span>
         )}
       </div>
+
+      {indexing && meta && <IndexingFund symbol={meta.title} indexing={indexing} usdPerBsv={usdPerBsv} />}
 
       {!meta && (
         <p className="mb-4 rounded-lg border border-yellow-900/60 bg-yellow-950/30 px-3 py-2 text-sm text-yellow-200/80">
@@ -77,7 +86,7 @@ export default async function RoomPage({ params }: PageProps<"/r/[kind]/[id]">) 
             marketUrl={marketUrl(room)}
             messagesApi={`/api/rooms/${room.kind}/${encodeURIComponent(room.id)}/messages`}
             signedIn={!!session}
-            usdPerBsv={await bsvUsd()}
+            usdPerBsv={usdPerBsv}
           />
           <div className="mt-8 flex items-center gap-3 text-sm">
             {!session ? (

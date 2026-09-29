@@ -13,7 +13,9 @@ Holder-only group chats for 1Sat Ordinals on BSV. Every BSV-21 token, BSV-20 tic
 3. **Chat.** Messages are stored in Postgres (`ss_messages`, schema in `db/schema.sql`, created automatically). Clients poll every 2.5s. With no `DATABASE_URL`, an in-memory store is used for dev.
 
 4. **Buy in.** Locked rooms list the cheapest live listings (GorillaPool orderbook; BSV-21 listings are pre-validated against the 1Sat overlay). **Buy & enter** runs `buyOrdinal` / `buyBsv21` from `@1sat/actions` in the user's wallet (or `purchaseOrdinal` / `purchaseBsv20` on legacy Yours), then re-proves holdings and opens the room. An optional operator fee is set with `NEXT_PUBLIC_MARKET_FEE_*`.
-5. **Market.** `/market` ranks rooms by recent 1sat.market trades plus chat activity, with floor, holders and a buy/enter action. The home page shows the top 12.
+   Listings that GorillaPool validates but the 1Sat overlay never indexed (their history wasn't submitted there) get **Buy · chat only**. It runs the same SDK purchase, with the listing check done against GorillaPool via `/api/listings/verify`. The buyer is warned that Yours may not show those tokens until the overlay catches up. See `docs/upstream/overlay-missing-bsv21-history.md`.
+5. **Indexing fund.** BSV-21 rooms show the token's 1Sat overlay fund (1,000 sats per indexed output) and let holders top it up with a plain BSV payment. The fee address is only shown when the overlay and GorillaPool agree on it.
+6. **Market.** `/market` ranks rooms by recent 1sat.market trades plus chat activity, with floor, holders and a buy/enter action. The home page shows the top 12.
 
 Rooms: `/r/bsv21/<txid_vout>`, `/r/bsv20/<TICK>`, `/r/coll/<collection origin outpoint>`.
 

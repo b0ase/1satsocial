@@ -15,6 +15,8 @@ export type Listing = {
   seller: string;
   /** Can be bought in-app with the 1Sat SDK. */
   buyable: boolean;
+  /** Valid on GorillaPool but unknown to the 1Sat overlay: buyable for chat access only (see buy-client). */
+  chatOnly: boolean;
   /** Identical lots (same amount, price, buyability) collapsed into this row. */
   count: number;
 };
@@ -23,7 +25,7 @@ export type Listing = {
 function collapse(listings: Listing[]): Listing[] {
   const out: Listing[] = [];
   for (const l of listings) {
-    const same = out.find((o) => o.label === l.label && o.priceSats === l.priceSats && o.buyable === l.buyable);
+    const same = out.find((o) => o.label === l.label && o.priceSats === l.priceSats && o.buyable === l.buyable && o.chatOnly === l.chatOnly);
     if (same) same.count++;
     else out.push({ ...l, count: 1 });
   }
@@ -93,6 +95,7 @@ async function loadMarket(room: RoomRef, limit: number): Promise<RoomMarket> {
         image: null,
         seller: r.owner,
         buyable: valid.has(r.outpoint),
+        chatOnly: room.kind === "bsv21" && !valid.has(r.outpoint),
         count: 1,
       };
     });
@@ -128,6 +131,7 @@ async function loadMarket(room: RoomRef, limit: number): Promise<RoomMarket> {
             : null,
         seller: r.owner,
         buyable: true,
+        chatOnly: false,
         count: 1,
       }),
     )

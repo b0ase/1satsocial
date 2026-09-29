@@ -82,8 +82,13 @@ export function BuyPanel(props: {
 
   async function buy(l: Listing) {
     const dollars = usd ? ` (about ${formatUsd(l.priceSats, usd)})` : "";
+    const chatOnlyWarning = l.chatOnly
+      ? "\n\nChat access only: GorillaPool verifies these are genuine tokens, but the 1Sat overlay that Yours relies on " +
+        "hasn't indexed their history. They'll get you into this room, but Yours may not show them or let you send or " +
+        "resell them until that history is indexed."
+      : "";
     const ok = window.confirm(
-      `Buy ${l.label} for ${sats(l.priceSats)}${dollars}?\n\nNetwork fees are added on top. You'll confirm the payment in Yours Wallet.`,
+      `Buy ${l.label} for ${sats(l.priceSats)}${dollars}?${chatOnlyWarning}\n\nNetwork fees are added on top. You'll confirm the payment in Yours Wallet.`,
     );
     if (!ok) return;
     setBusy(l.outpoint);
@@ -91,7 +96,13 @@ export function BuyPanel(props: {
     try {
       setStatus("Confirm the purchase in Yours…");
       const { buyListing } = await import("@/lib/buy-client");
-      const id = await buyListing({ kind: props.kind, roomId: props.roomId, outpoint: l.outpoint, amount: l.amount });
+      const id = await buyListing({
+        kind: props.kind,
+        roomId: props.roomId,
+        outpoint: l.outpoint,
+        amount: l.amount,
+        chatOnly: l.chatOnly,
+      });
       setTxid(id);
 
       // Re-prove holdings so the server sees the key the new token landed on.
@@ -202,6 +213,12 @@ export function BuyPanel(props: {
           Dollar prices are estimates at ${usd.toFixed(2)} per BSV, before network fees.
         </p>
       )}
+      {props.listings.some((l) => l.chatOnly) && (
+        <p className="mt-1 text-xs text-muted">
+          <span className="text-gold">Buy · chat only</span>: genuine tokens verified by GorillaPool, but not yet indexed by
+          the 1Sat overlay, so Yours may not show or send them until it catches up.
+        </p>
+      )}
 
       {status && <p className="mt-3 text-sm text-gold">{status}</p>}
       {error && <p className="mt-3 text-sm text-red-400">{error}</p>}
@@ -236,8 +253,20 @@ function ListingAction(props: {
       </span>
     );
   }
+  if (l.chatOnly) {
+    return (
+      <button
+        onClick={props.onBuy}
+        disabled={!!props.busy}
+        title="Genuine tokens (verified by GorillaPool) that Yours may not display until the 1Sat overlay indexes them"
+        className={`${base} border border-gold/60 text-gold hover:bg-gold-soft disabled:opacity-50`}
+      >
+        {props.busy === l.outpoint ? "Buying…" : "Buy · chat only"}
+      </button>
+    );
+  }
   if (!l.buyable) {
-    // The 1Sat overlay doesn't track this listing, so the SDK can't buy it safely in-app.
+    // BSV-20 ticks: the SDK has no purchase action for them.
     return (
       <a
         href={props.marketUrl}

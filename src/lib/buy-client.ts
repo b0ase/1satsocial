@@ -54,7 +54,41 @@ function report(data: object) {
   fetch("/api/debug", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(data) }).catch(() => {});
 }
 
-export type BuyRequest = { kind: RoomKind; roomId: string; outpoint: string; amount: string | null };
+export type BuyRequest = {
+  kind: RoomKind;
+  roomId: string;
+  outpoint: string;
+  amount: string | null;
+  /**
+   * The listing isn't in the 1Sat overlay (its history was never submitted there), so validate it
+   * against GorillaPool instead. The tokens are real, but Yours may not show or send them until
+   * the overlay indexes their history.
+   */
+  chatOnly?: boolean;
+};
+
+/** OneSatServices whose BSV-21 listing check asks GorillaPool (via our server) instead of the overlay. */
+function indexerValidatedServices(services: OneSatServices): OneSatServices {
+  const bsv21 = new Proxy(services.bsv21, {
+    get(target, prop, receiver) {
+      if (prop === "validateOutput") {
+        return async (tokenId: string, outpoint: string) => {
+          const res = await fetch(`/api/listings/verify?tokenId=${tokenId}&outpoint=${encodeURIComponent(outpoint)}`);
+          const v = (await res.json()) as { ok: boolean; reason?: string };
+          if (!v.ok) throw new Error(`listing-check-failed:${v.reason}`);
+          return { outpoint };
+        };
+      }
+      const value = Reflect.get(target, prop, receiver);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  return new Proxy(services, {
+    get(target, prop, receiver) {
+      return prop === "bsv21" ? bsv21 : Reflect.get(target, prop, receiver);
+    },
+  });
+}
 
 // Optional marketplace fee paid to the app operator on each in-app purchase (e.g. 0.02 = 2%).
 const fee = {
@@ -67,6 +101,8 @@ const ERRORS: Record<string, string> = {
   "listing-transaction-not-found": "That listing is no longer available.",
   "not-an-ordlock-listing": "That listing is no longer available.",
   "services-required-for-purchase": "Marketplace service unavailable. Try again.",
+  "listing-check-failed:already-sold": "That listing has just been sold.",
+  "listing-check-failed:not-a-listing": "That listing is no longer available.",
 };
 
 function friendly(error: string) {
@@ -84,7 +120,9 @@ export async function buyListing(req: BuyRequest): Promise<string> {
     // with a misleading "inputBEEF ... 0 Transactions" error because it can't match the input.
     const outpoint = req.outpoint.replace("_", ".");
     const calls: object[] = [];
-    const ctx = createContext(traced(conn.wallet, calls), { services: new OneSatServices("main"), chain: "main" });
+    const base = new OneSatServices("main");
+    const services = req.chatOnly && req.kind === "bsv21" ? indexerValidatedServices(base) : base;
+    const ctx = createContext(traced(conn.wallet, calls), { services, chain: "main" });
     let result: { txid?: string; error?: string };
     try {
       result =
