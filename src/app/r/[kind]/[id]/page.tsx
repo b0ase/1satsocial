@@ -18,7 +18,16 @@ export async function generateMetadata({ params }: PageProps<"/r/[kind]/[id]">):
   const { kind, id } = await params;
   const room = parseRoom(kind, id);
   const meta = room ? await roomMeta(room.kind, room.id) : null;
-  return { title: meta ? `${meta.title} holders · 1satsocial` : "Room · 1satsocial" };
+  const title = meta ? `${meta.title} holders · 1satsocial` : "Room · 1satsocial";
+  const description = meta
+    ? `The holder-only chat for ${meta.title}${meta.holders ? `, one of ${meta.holders.toLocaleString("en-US")} holders on-chain` : ""}. Hold it to join, or buy in with Yours Wallet.`
+    : "A holder-only chat room on 1satsocial.";
+  return {
+    title,
+    description,
+    openGraph: { title, description, type: "website", siteName: "1satsocial" },
+    twitter: { card: "summary_large_image", title, description },
+  };
 }
 
 export default async function RoomPage({ params }: PageProps<"/r/[kind]/[id]">) {

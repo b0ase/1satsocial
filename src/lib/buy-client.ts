@@ -1,7 +1,7 @@
 "use client";
 
 // Buying a listing with the user's wallet. Loaded on demand (it pulls in the 1Sat SDK).
-import { connectWallet } from "@1sat/connect";
+import { connectBrc100 } from "./wallet-connection";
 import { buyBsv21, buyOrdinal, createContext } from "@1sat/actions";
 import { OneSatServices } from "@1sat/client";
 import { Beef, type WalletInterface } from "@bsv/sdk";
@@ -144,7 +144,7 @@ function friendly(error: string) {
 
 /** Buy a listing. Resolves with the txid once the wallet has signed and broadcast. */
 export async function buyListing(req: BuyRequest): Promise<string> {
-  const conn = await connectWallet().catch(() => null);
+  const conn = await connectBrc100().catch(() => null);
 
   if (conn) {
     // BRC-100 wallets expect "txid.vout"; the indexer uses "txid_vout". Yours rejects the latter

@@ -8,10 +8,24 @@ import "./globals.css";
 const geistSans = Geist({ variable: "--font-geist-sans", subsets: ["latin"] });
 const geistMono = Geist_Mono({ variable: "--font-geist-mono", subsets: ["latin"] });
 
+const SITE_URL =
+  process.env.NEXT_PUBLIC_SITE_URL ??
+  (process.env.VERCEL_PROJECT_PRODUCTION_URL ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}` : "http://localhost:3000");
+
+const DESCRIPTION =
+  "Every BSV-21 token, BSV-20 tick and 1Sat Ordinals collection gets its own group chat. Only holders get in. Sign in and buy in with Yours Wallet.";
+
 export const metadata: Metadata = {
+  metadataBase: new URL(SITE_URL),
   title: "1satsocial: holder-only chat for 1Sat Ordinals",
-  description:
-    "Every BSV-21 token, BSV-20 tick and 1Sat Ordinals collection gets its own group chat. Only holders get in. Sign in with Yours Wallet.",
+  description: DESCRIPTION,
+  openGraph: {
+    type: "website",
+    siteName: "1satsocial",
+    title: "1satsocial: every token is a room",
+    description: DESCRIPTION,
+  },
+  twitter: { card: "summary_large_image", title: "1satsocial: every token is a room", description: DESCRIPTION },
 };
 
 export default async function RootLayout({ children }: LayoutProps<"/">) {

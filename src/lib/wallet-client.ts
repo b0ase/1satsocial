@@ -1,6 +1,6 @@
 "use client";
 
-import { connectWallet } from "@1sat/connect";
+import { connectBrc100 } from "./wallet-connection";
 import { Utils, type WalletInterface, type WalletProtocol } from "@bsv/sdk";
 import type { YoursProviderType } from "yours-wallet-provider";
 import { LOGIN_KEY_ID, LOGIN_PROTOCOL, MAX_PROOF_KEYS, type LoginProof } from "./login-shared";
@@ -55,12 +55,6 @@ async function submit(proof: LoginProof) {
   if (!res.ok) throw new Error(data.error || "Sign-in failed");
   return data as { userId: string; addresses: string[] };
 }
-
-// P1SAT deposit addresses (see deriveDepositAddresses in @1sat/actions): where received
-// ordinals and tokens land by default. Current and pre-rename protocol, first few indexes.
-const DEPOSIT_DERIVATIONS: Derivation[] = [[0, "onesat"], [0, "p 1sat"]].flatMap((protocolID) =>
-  [0, 1, 2].map((i) => ({ protocolID: protocolID as WalletProtocol, keyID: `1sat ${i}`, counterparty: "self" })),
-);
 
 const log = (...args: unknown[]) => console.info("[1satsocial]", ...args);
 
@@ -119,7 +113,6 @@ async function assetDerivations(wallet: WalletInterface): Promise<Derivation[]> 
       if (outputs.length < 500) break;
     }
   }
-  for (const d of DEPOSIT_DERIVATIONS) seen.set(JSON.stringify(d), d);
   return [...seen.values()].slice(0, MAX_PROOF_KEYS);
 }
 
@@ -180,7 +173,7 @@ export class NoWalletError extends Error {}
 /** Sign in with Yours: BRC-100 (Yours v5+) first, then the legacy injected provider. */
 export async function signIn(onStatus: (s: string) => void = () => {}) {
   onStatus("Looking for Yours Wallet…");
-  const result = await connectWallet().catch(() => null);
+  const result = await connectBrc100().catch(() => null);
   if (result) return loginBrc100(result.wallet, result.identityKey, onStatus);
   if (window.yours?.isReady) return loginLegacy(window.yours, onStatus);
   throw new NoWalletError("No wallet found");
@@ -195,7 +188,7 @@ export async function signOut() {
  * Yours v5 (BRC-100) has no balance call, so this sums the default basket; wallets may refuse that.
  */
 export async function walletBalance(): Promise<number | null> {
-  const conn = await connectWallet().catch(() => null);
+  const conn = await connectBrc100().catch(() => null);
   if (conn) {
     try {
       let total = 0;
