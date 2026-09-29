@@ -3,7 +3,7 @@
 import { connectBrc100 } from "./wallet-connection";
 import { Utils, type WalletInterface, type WalletProtocol } from "@bsv/sdk";
 import type { YoursProviderType } from "yours-wallet-provider";
-import { LOGIN_KEY_ID, LOGIN_PROTOCOL, MAX_PROOF_KEYS, type LoginProof } from "./login-shared";
+import { LOGIN_KEY_ID, LOGIN_PROTOCOL, MAX_PROOF_KEYS, MAX_PROOF_OUTPUTS, type LoginProof } from "./login-shared";
 
 declare global {
   interface Window {
@@ -12,7 +12,8 @@ declare global {
 }
 
 // Wallet baskets that hold 1Sat assets (see @1sat/types: ONESAT_BASKET, BSV21_BASKET, BSV20_BASKET).
-const ASSET_BASKETS = ["1sat", "bsv21", "bsv20"];
+// BSV-20 (tick) is no longer supported by current indexers, so only these are read.
+const ASSET_BASKETS = ["1sat", "bsv21"];
 
 type Derivation = { protocolID: WalletProtocol; keyID: string; counterparty: string };
 
@@ -61,9 +62,10 @@ const log = (...args: unknown[]) => console.info("[1satsocial]", ...args);
 // Sign-in diagnostics, sent to the server (kept in memory, dev only) to debug wallet formats.
 const diag: Record<string, unknown> = {};
 
-/** Collect the distinct keys that lock this wallet's ordinals and tokens. */
-async function assetDerivations(wallet: WalletInterface): Promise<Derivation[]> {
+/** Collect the outputs this wallet holds in its 1Sat baskets, and the distinct keys that lock them. */
+async function assetDerivations(wallet: WalletInterface): Promise<{ derivations: Derivation[]; outpoints: string[] }> {
   const seen = new Map<string, Derivation>();
+  const outpoints: string[] = [];
   for (const basket of ASSET_BASKETS) {
     for (let offset = 0; offset < 5000 && seen.size < MAX_PROOF_KEYS; offset += 500) {
       let res;
@@ -84,6 +86,7 @@ async function assetDerivations(wallet: WalletInterface): Promise<Derivation[]> 
       const { outputs, totalOutputs } = res;
       let parsed = 0;
       for (const o of outputs) {
+        if (o.spendable !== false && o.outpoint) outpoints.push(o.outpoint);
         const ci = await plaintextCi(wallet, o.customInstructions);
         if (!ci) continue;
         try {
@@ -113,12 +116,12 @@ async function assetDerivations(wallet: WalletInterface): Promise<Derivation[]> 
       if (outputs.length < 500) break;
     }
   }
-  return [...seen.values()].slice(0, MAX_PROOF_KEYS);
+  return { derivations: [...seen.values()].slice(0, MAX_PROOF_KEYS), outpoints: outpoints.slice(0, MAX_PROOF_OUTPUTS) };
 }
 
 async function loginBrc100(wallet: WalletInterface, identityKey: string, onStatus: (s: string) => void) {
   onStatus("Finding your ordinals and tokens…");
-  const derivations = await assetDerivations(wallet);
+  const { derivations, outpoints } = await assetDerivations(wallet);
   const message = await getChallenge();
   const data = Utils.toArray(message, "utf8");
 
@@ -144,7 +147,16 @@ async function loginBrc100(wallet: WalletInterface, identityKey: string, onStatu
   }
 
   diag.derivations = derivations;
-  const result = await submit({ kind: "brc100", message, identityKey, identitySig: Utils.toHex(idSig), keys, diag });
+  onStatus("Verifying your holdings on-chain…");
+  const result = await submit({
+    kind: "brc100",
+    message,
+    identityKey,
+    identitySig: Utils.toHex(idSig),
+    keys,
+    outputs: outpoints,
+    diag,
+  });
   log("verified addresses", result.addresses);
   return result;
 }

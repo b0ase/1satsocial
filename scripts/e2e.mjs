@@ -50,6 +50,22 @@ class Client {
   check("challenge replay rejected", again.status === 400 || again.status === 401);
 }
 
+// 1b. Claiming someone else's outputs at sign-in yields no holdings (per-output ownership proofs)
+{
+  const c = new Client();
+  const wallet = new ProtoWallet(PrivateKey.fromRandom());
+  const { publicKey: identityKey } = await wallet.getPublicKey({ identityKey: true });
+  const message = await c.challenge();
+  const data = Utils.toArray(message, "utf8");
+  const { signature: idSig } = await wallet.createSignature({ data, protocolID: [0, "1satsocial login"], keyID: "1", counterparty: "anyone" });
+  const res = await c.verify({
+    kind: "brc100", message, identityKey, identitySig: Utils.toHex(idSig), keys: [],
+    outputs: ["938b41755b20b3191dadef4e1dbfb9e9b37abbe9d8f7eab9e067579caf4e109f_0", "7e45a70592d70b89bf251f0c22ba548470db194c0af2b5e48d6dcc33c0e8cdb5_0"],
+  });
+  const body = await res.json();
+  check("foreign outputs not credited", res.ok && body.holdings === 0, JSON.stringify(body));
+}
+
 // 2. Forged identity: sign with a different key
 {
   const c = new Client();

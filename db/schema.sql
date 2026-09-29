@@ -18,3 +18,14 @@ create table if not exists ss_grants (
   expires_at timestamptz not null,
   primary key (room, txid)
 );
+
+-- Outputs a user proved they own at sign-in (per-output ownership proofs; see src/lib/ownership.ts).
+create table if not exists ss_holdings (
+  user_id text not null,
+  room text not null,
+  outpoint text not null,
+  amount text not null,
+  source text not null,        -- overlay | gorillapool | ordfs
+  verified_at timestamptz not null default now(),
+  primary key (user_id, outpoint)
+);

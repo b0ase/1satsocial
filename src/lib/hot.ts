@@ -75,8 +75,9 @@ async function tipHeight(): Promise<number | null> {
   }
 }
 
+// BSV-21 only: BSV-20 (tick) tokens are no longer supported by current indexers.
 function tokenRef(r: TokenRow): RoomRef | null {
-  return r.id ? parseRoom("bsv21", r.id) : r.tick ? parseRoom("bsv20", r.tick) : null;
+  return r.id ? parseRoom("bsv21", r.id) : null;
 }
 
 function collectionId(r: OrdRow): string | null {

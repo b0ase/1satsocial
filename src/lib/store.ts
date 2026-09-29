@@ -11,6 +11,9 @@ export type Message = {
 
 export type RoomActivity = { room: string; messages: number; members: number; lastAt: string };
 
+/** An output the user proved they own at sign-in (see ownership.ts). */
+export type HoldingRow = { room: string; outpoint: string; amount: string; source: string; verifiedAt: string };
+
 /** Provisional room access from a verified-but-unconfirmed purchase, until the indexers catch up. */
 export type Grant = { room: string; userId: string; txid: string; holding: string; expiresAt: string };
 
@@ -22,12 +25,15 @@ interface Store {
   addGrant(g: Grant): Promise<boolean>;
   activeGrant(room: string, userId: string): Promise<Grant | null>;
   activeGrantsFor(userId: string): Promise<Grant[]>;
+  /** Replace the user's verified holdings with the latest proof. */
+  replaceHoldings(userId: string, rows: Omit<HoldingRow, "verifiedAt">[]): Promise<void>;
+  holdingsFor(userId: string): Promise<HoldingRow[]>;
 }
 
 // ---- In-memory store (dev / no DATABASE_URL). Survives HMR, not restarts.
 // Process-wide state lives on globalThis so it survives dev hot reloads; the store objects themselves
 // are rebuilt on each module load so new methods take effect (a cached instance would keep old code).
-type MemoryData = { rows: Message[]; seq: number; grants: Grant[] };
+type MemoryData = { rows: Message[]; seq: number; grants: Grant[]; holdings?: Map<string, HoldingRow[]> };
 const g = globalThis as unknown as { __ssMemory?: MemoryData; __ssSql?: postgres.Sql };
 
 class MemoryStore implements Store {
@@ -51,6 +57,13 @@ class MemoryStore implements Store {
   async activeGrantsFor(userId: string) {
     const now = new Date().toISOString();
     return this.grants.filter((g) => g.userId === userId && g.expiresAt > now);
+  }
+  async replaceHoldings(userId: string, rows: Omit<HoldingRow, "verifiedAt">[]) {
+    const verifiedAt = new Date().toISOString();
+    (this.data.holdings ??= new Map()).set(userId, rows.map((r) => ({ ...r, verifiedAt })));
+  }
+  async holdingsFor(userId: string) {
+    return this.data.holdings?.get(userId) ?? [];
   }
   async add(m: Omit<Message, "id" | "createdAt">) {
     const row = { ...m, id: ++this.data.seq, createdAt: new Date().toISOString() };
@@ -102,6 +115,18 @@ class PgStore implements Store {
             expires_at timestamptz not null,
             primary key (room, txid)
           )`,
+      )
+      .then(
+        () => this.sql`
+          create table if not exists ss_holdings (
+            user_id text not null,
+            room text not null,
+            outpoint text not null,
+            amount text not null,
+            source text not null,
+            verified_at timestamptz not null default now(),
+            primary key (user_id, outpoint)
+          )`,
       );
   }
   private map = (r: postgres.Row): Message => ({
@@ -144,6 +169,29 @@ class PgStore implements Store {
     return r
       ? { room: r.room, userId: r.user_id, txid: r.txid, holding: r.holding, expiresAt: new Date(r.expires_at).toISOString() }
       : null;
+  }
+  async replaceHoldings(userId: string, rows: Omit<HoldingRow, "verifiedAt">[]) {
+    await this.ready;
+    await this.sql.begin(async (tx) => {
+      await tx`delete from ss_holdings where user_id = ${userId}`;
+      for (const r of rows) {
+        await tx`
+          insert into ss_holdings (user_id, room, outpoint, amount, source)
+          values (${userId}, ${r.room}, ${r.outpoint}, ${r.amount}, ${r.source})
+          on conflict (user_id, outpoint) do nothing`;
+      }
+    });
+  }
+  async holdingsFor(userId: string) {
+    await this.ready;
+    const rows = await this.sql`select * from ss_holdings where user_id = ${userId}`;
+    return rows.map((r) => ({
+      room: r.room,
+      outpoint: r.outpoint,
+      amount: r.amount,
+      source: r.source,
+      verifiedAt: new Date(r.verified_at).toISOString(),
+    }));
   }
   async activeGrantsFor(userId: string) {
     await this.ready;

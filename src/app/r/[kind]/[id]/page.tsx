@@ -64,6 +64,13 @@ export default async function RoomPage({ params }: PageProps<"/r/[kind]/[id]">) 
 
       {indexing && meta && <IndexingFund symbol={meta.title} tokenId={room.id} indexing={indexing} usdPerBsv={usdPerBsv} userId={session?.userId ?? null} />}
 
+      {room.kind === "bsv20" && (
+        <p className="mb-4 rounded-lg border border-yellow-900/60 bg-yellow-950/30 px-3 py-2 text-sm text-yellow-200/80">
+          BSV-20 (ticker) tokens are no longer supported by current 1Sat indexers, so balances for this room may be out of
+          date and it isn&apos;t listed on the market. BSV-21 tokens and 1Sat collections are fully supported.
+        </p>
+      )}
+
       {!meta && (
         <p className="mb-4 rounded-lg border border-yellow-900/60 bg-yellow-950/30 px-3 py-2 text-sm text-yellow-200/80">
           The indexer doesn&apos;t recognise this token. Check the id.

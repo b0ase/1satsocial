@@ -1,7 +1,9 @@
 import { verifyLogin } from "@/lib/auth";
 import { json, sameOrigin } from "@/lib/http";
 import type { LoginProof } from "@/lib/login-shared";
+import { verifyOutputs } from "@/lib/ownership";
 import { challengeMessage, setSession, takeChallenge } from "@/lib/session";
+import { store } from "@/lib/store";
 
 export async function POST(req: Request) {
   if (!sameOrigin(req)) return json({ error: "Bad origin" }, 403);
@@ -23,6 +25,14 @@ export async function POST(req: Request) {
     (g.__ssDiag ??= new Map()).set(result.userId, { at: new Date().toISOString(), ...proof.diag });
   }
 
+  // Per-output ownership proofs: keep only outputs locked to a proven key, unspent, and a valid asset.
+  let holdings = 0;
+  if (proof.kind === "brc100" && Array.isArray(proof.outputs)) {
+    const rows = await verifyOutputs(result.addresses, proof.outputs.filter((o): o is string => typeof o === "string"));
+    await store.replaceHoldings(result.userId, rows);
+    holdings = rows.length;
+  }
+
   await setSession(result);
-  return json({ ok: true, userId: result.userId, addresses: result.addresses });
+  return json({ ok: true, userId: result.userId, addresses: result.addresses, holdings });
 }

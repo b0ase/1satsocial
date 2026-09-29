@@ -1,5 +1,6 @@
 import { collectionCount, fungibleBalances, formatAmount, heldCollections, roomMeta, type RoomMeta } from "./indexer";
 import { artUrl } from "./content";
+import { isSpent } from "./ownership";
 import { parseRoom, roomFromKey, type RoomRef } from "./room-ref";
 import type { Session } from "./session";
 import { store } from "./store";
@@ -9,8 +10,25 @@ export * from "./room-ref";
 export type Access = { ok: boolean; holding: string | null; error?: string };
 
 /** Does any of the session's proven addresses hold this room's token? */
+/** The user's proven holdings (per-output proofs from sign-in) that are still unspent, grouped by room. */
+async function provenHoldings(session: Session): Promise<Map<string, bigint>> {
+  const rows = await store.holdingsFor(session.userId).catch(() => []);
+  const live = await Promise.all(rows.map(async (r) => ((await isSpent(r.outpoint)) ? null : r)));
+  const byRoom = new Map<string, bigint>();
+  for (const r of live) if (r) byRoom.set(r.room, (byRoom.get(r.room) ?? BigInt(0)) + BigInt(r.amount));
+  return byRoom;
+}
+
+function holdingLabel(room: RoomRef, amount: bigint, dec: number) {
+  return room.kind === "coll" ? `${amount} item${amount === BigInt(1) ? "" : "s"}` : formatAmount(amount, dec);
+}
+
 export async function checkAccess(session: Session | null, room: RoomRef, meta?: RoomMeta | null): Promise<Access> {
   if (!session) return { ok: false, holding: null };
+  // 1. Outputs the user proved they own, re-checked for spends (selling the token ends access).
+  const proven = (await provenHoldings(session)).get(room.key);
+  if (proven) return { ok: true, holding: holdingLabel(room, proven, (meta ?? (await roomMeta(room.kind, room.id)))?.dec ?? 0) };
+  // 2. Legacy fallback: GorillaPool's address index (also covers older wallets without per-output proofs).
   const onChain = await checkHoldings(session, room, meta);
   if (onChain.ok) return onChain;
   // A verified purchase the indexers haven't caught up with yet (see /claim).
@@ -54,6 +72,21 @@ export type EligibleRoom = RoomRef & {
 /** Every room the session's addresses qualify for. */
 export async function eligibleRooms(session: Session): Promise<EligibleRoom[]> {
   const out = new Map<string, EligibleRoom>();
+  // Proven holdings first (authoritative), then the legacy address index, then provisional grants.
+  const proven = await provenHoldings(session);
+  await Promise.all(
+    [...proven].map(async ([key, amount]) => {
+      const ref = roomFromKey(key);
+      if (!ref) return;
+      const meta = await roomMeta(ref.kind, ref.id);
+      out.set(ref.key, {
+        ...ref,
+        title: meta?.title ?? ref.id.slice(0, 12),
+        image: meta?.image ?? null,
+        holding: holdingLabel(ref, amount, meta?.dec ?? 0),
+      });
+    }),
+  );
   const [fungibles, colls] = await Promise.all([
     Promise.all(session.addresses.map((a) => fungibleBalances(a).catch(() => []))),
     Promise.all(session.addresses.map((a) => heldCollections(a).catch(() => new Map<string, number>()))),
@@ -73,7 +106,7 @@ export async function eligibleRooms(session: Session): Promise<EligibleRoom[]> {
   await Promise.all(
     [...collTotals].slice(0, 40).map(async ([id, n]) => {
       const ref = parseRoom("coll", id);
-      if (!ref) return;
+      if (!ref || out.has(ref.key)) return; // proven holdings win
       const meta = await roomMeta("coll", ref.id);
       out.set(ref.key, { ...ref, title: meta?.title ?? `Collection ${id.slice(0, 8)}`, image: meta?.image ?? null, holding: `${n} item${n === 1 ? "" : "s"}` });
     }),

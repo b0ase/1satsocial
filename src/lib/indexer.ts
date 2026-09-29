@@ -171,11 +171,8 @@ export function trending(limit = 9): Promise<{ tokens: Trending[]; collections: 
 
     const tokenCounts = new Map<string, Trending>();
     for (const s of tokenPages.flat()) {
-      const t: Omit<Trending, "trades"> | null = s.id
-        ? { kind: "bsv21", id: s.id }
-        : s.tick
-          ? { kind: "bsv20", id: s.tick.toUpperCase() }
-          : null;
+      // BSV-20 (tick) sales are skipped: current indexers no longer support BSV-20.
+      const t: Omit<Trending, "trades"> | null = s.id ? { kind: "bsv21", id: s.id } : null;
       if (!t) continue;
       const k = `${t.kind}:${t.id}`;
       tokenCounts.set(k, { ...t, trades: (tokenCounts.get(k)?.trades ?? 0) + 1 });
