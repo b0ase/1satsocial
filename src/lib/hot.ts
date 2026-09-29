@@ -46,7 +46,16 @@ type OrdRow = {
   origin?: { data?: { map?: { name?: string; subTypeData?: { collectionId?: string } | string } } };
 };
 
-const g = globalThis as unknown as { __ssHot?: { value: HotBoard; expires: number }; __ssHotPending?: Promise<HotBoard> };
+const g = globalThis as unknown as {
+  __ssHot?: { value: HotBoard; expires: number };
+  __ssHotPending?: Promise<HotBoard>;
+  __ssHotGood?: HotBoard; // last board with real data, used when an upstream call fails
+};
+
+/** A board missing its rooms or ticker means an upstream API failed; don't let that blank the page. */
+function degraded(b: HotBoard) {
+  return b.rooms.length === 0 || b.ticker.length === 0;
+}
 
 async function gp<T>(path: string): Promise<T | null> {
   try {
@@ -180,16 +189,38 @@ async function build(): Promise<HotBoard> {
   // Newest first; unconfirmed ("just now") at the front.
   ticker.sort((a, b) => (a.minutesAgo ?? -1) - (b.minutesAgo ?? -1));
 
-  return {
+  const board: HotBoard = {
     rooms: enriched.filter((r): r is HotRoom => !!r).slice(0, 12),
     ticker: ticker.slice(0, 30),
     usdPerBsv: usd,
     updatedAt: new Date().toISOString(),
   };
+  if (!degraded(board)) {
+    g.__ssHotGood = board;
+    return board;
+  }
+  const good = g.__ssHotGood;
+  return good
+    ? {
+        ...board,
+        rooms: board.rooms.length ? board.rooms : good.rooms,
+        ticker: board.ticker.length ? board.ticker : good.ticker,
+        usdPerBsv: board.usdPerBsv ?? good.usdPerBsv,
+      }
+    : board;
 }
 
 // Shared across server instances (Vercel data cache), refreshed in the background every 60s.
-const sharedBoard = unstable_cache(() => localBoard(), ["hot-board-v1"], { revalidate: 60 });
+// A degraded board throws so it isn't stored in the shared cache; callers fall back to the local one.
+const sharedBoard = unstable_cache(
+  async () => {
+    const b = await localBoard();
+    if (degraded(b)) throw new Error("degraded hot board");
+    return b;
+  },
+  ["hot-board-v1"],
+  { revalidate: 60 },
+);
 
 export async function hotBoard(): Promise<HotBoard> {
   try {
