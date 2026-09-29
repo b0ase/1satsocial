@@ -1,5 +1,5 @@
 {
-  "name": "1sat-social",
+  "name": "1satsocial",
   "version": "0.1.0",
   "private": true,
   "scripts": {
@@ -9,9 +9,15 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "@1sat/actions": "^0.0.225",
+    "@1sat/client": "^0.0.55",
+    "@1sat/connect": "^0.0.97",
+    "@bsv/sdk": "^2.8.10",
     "next": "16.3.7",
+    "postgres": "^3.4.9",
     "react": "19.2.8",
-    "react-dom": "19.2.8"
+    "react-dom": "19.2.8",
+    "yours-wallet-provider": "^3.7.0"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
@@ -23,5 +29,7 @@
     "tailwindcss": "^4",
     "typescript": "^5"
   },
-  "packageManager": "pnpm@10.28.0"
+  "packageManager": "pnpm@10.28.0",
+  "license": "MIT",
+  "repository": "github:b0ase/1satsocial"
 }

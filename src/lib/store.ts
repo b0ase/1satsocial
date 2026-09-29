@@ -1,0 +1,99 @@
+import postgres from "postgres";
+
+export type Message = {
+  id: number;
+  room: string;
+  userId: string;
+  name: string | null;
+  body: string;
+  createdAt: string;
+};
+
+export type RoomActivity = { room: string; messages: number; members: number; lastAt: string };
+
+interface Store {
+  add(m: Omit<Message, "id" | "createdAt">): Promise<Message>;
+  list(room: string, opts: { after?: number; limit?: number }): Promise<Message[]>;
+  activeRooms(limit: number): Promise<RoomActivity[]>;
+}
+
+// ---- In-memory store (dev / no DATABASE_URL). Survives HMR, not restarts.
+class MemoryStore implements Store {
+  private rows: Message[] = [];
+  private seq = 0;
+  async add(m: Omit<Message, "id" | "createdAt">) {
+    const row = { ...m, id: ++this.seq, createdAt: new Date().toISOString() };
+    this.rows.push(row);
+    return row;
+  }
+  async list(room: string, { after, limit = 100 }: { after?: number; limit?: number }) {
+    const rows = this.rows.filter((r) => r.room === room && (after === undefined || r.id > after));
+    return after === undefined ? rows.slice(-limit) : rows.slice(0, limit);
+  }
+  async activeRooms(limit: number) {
+    const by = new Map<string, { messages: number; users: Set<string>; lastAt: string }>();
+    for (const r of this.rows) {
+      const e = by.get(r.room) ?? { messages: 0, users: new Set(), lastAt: r.createdAt };
+      e.messages++;
+      e.users.add(r.userId);
+      e.lastAt = r.createdAt;
+      by.set(r.room, e);
+    }
+    return [...by]
+      .map(([room, e]) => ({ room, messages: e.messages, members: e.users.size, lastAt: e.lastAt }))
+      .sort((a, b) => b.lastAt.localeCompare(a.lastAt))
+      .slice(0, limit);
+  }
+}
+
+// ---- Postgres store (production). Schema lives in db/schema.sql and is applied on first use.
+class PgStore implements Store {
+  private sql: postgres.Sql;
+  private ready: Promise<unknown>;
+  constructor(url: string) {
+    this.sql = postgres(url, { max: 5, idle_timeout: 20 });
+    this.ready = this.sql`
+      create table if not exists ss_messages (
+        id bigserial primary key,
+        room text not null,
+        user_id text not null,
+        name text,
+        body text not null,
+        created_at timestamptz not null default now()
+      )`.then(() => this.sql`create index if not exists ss_messages_room_id on ss_messages (room, id)`);
+  }
+  private map = (r: postgres.Row): Message => ({
+    id: Number(r.id),
+    room: r.room,
+    userId: r.user_id,
+    name: r.name,
+    body: r.body,
+    createdAt: new Date(r.created_at).toISOString(),
+  });
+  async add(m: Omit<Message, "id" | "createdAt">) {
+    await this.ready;
+    const [row] = await this.sql`
+      insert into ss_messages (room, user_id, name, body)
+      values (${m.room}, ${m.userId}, ${m.name}, ${m.body}) returning *`;
+    return this.map(row);
+  }
+  async list(room: string, { after, limit = 100 }: { after?: number; limit?: number }) {
+    await this.ready;
+    const rows =
+      after === undefined
+        ? await this.sql`select * from (select * from ss_messages where room = ${room} order by id desc limit ${limit}) t order by id`
+        : await this.sql`select * from ss_messages where room = ${room} and id > ${after} order by id limit ${limit}`;
+    return rows.map(this.map);
+  }
+  async activeRooms(limit: number) {
+    await this.ready;
+    const rows = await this.sql`
+      select room, count(*)::int as messages, count(distinct user_id)::int as members, max(created_at) as last_at
+      from ss_messages where created_at > now() - interval '30 days'
+      group by room order by last_at desc limit ${limit}`;
+    return rows.map((r) => ({ room: r.room, messages: r.messages, members: r.members, lastAt: new Date(r.last_at).toISOString() }));
+  }
+}
+
+const g = globalThis as unknown as { __ssStore?: Store };
+export const store: Store = (g.__ssStore ??= process.env.DATABASE_URL ? new PgStore(process.env.DATABASE_URL) : new MemoryStore());
