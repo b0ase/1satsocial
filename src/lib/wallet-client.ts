@@ -1,5 +1,6 @@
 "use client";
 
+import { BSV21_BASKET, ONESAT_BASKET } from "@1sat/types";
 import { connectBrc100 } from "./wallet-connection";
 import { Utils, type WalletInterface, type WalletProtocol } from "@bsv/sdk";
 import type { YoursProviderType } from "yours-wallet-provider";
@@ -11,9 +12,10 @@ declare global {
   }
 }
 
-// Wallet baskets that hold 1Sat assets (see @1sat/types: ONESAT_BASKET, BSV21_BASKET, BSV20_BASKET).
-// BSV-20 (tick) is no longer supported by current indexers, so only these are read.
-const ASSET_BASKETS = ["1sat", "bsv21"];
+// Wallet baskets that hold 1Sat assets (current SDK names). BSV-20 (tick) is no longer supported by current indexers.
+// Legacy "p 1sat …" baskets are left to the wallet's own migration (migrateLegacyP1SatBaskets): they're
+// permission-gated, so reading them here could add approval prompts.
+const ASSET_BASKETS = [ONESAT_BASKET, BSV21_BASKET];
 
 type Derivation = { protocolID: WalletProtocol; keyID: string; counterparty: string };
 

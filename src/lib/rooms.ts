@@ -9,10 +9,14 @@ export * from "./room-ref";
 
 export type Access = { ok: boolean; holding: string | null; error?: string };
 
-/** The user's proven holdings (per-output proofs from sign-in) that are still unspent, grouped by room. */
-async function provenHoldings(session: Session): Promise<Map<string, bigint>> {
-  const rows = await store.holdingsFor(session.userId).catch(() => []);
-  const spent = await spentMany(rows.map((r) => r.outpoint));
+/**
+ * The user's proven holdings, grouped by room. Spend status is only checked when `room` is given (entering that
+ * room): listing rooms uses the stored proofs as-is, so a page load doesn't hit the API once per output.
+ */
+async function provenHoldings(session: Session, room?: string): Promise<Map<string, bigint>> {
+  const all = await store.holdingsFor(session.userId).catch(() => []);
+  const rows = room ? all.filter((r) => r.room === room) : all;
+  const spent = room ? await spentMany(rows.map((r) => r.outpoint)) : new Map<string, boolean>();
   const live = rows.filter((r) => !spent.get(r.outpoint));
   const byRoom = new Map<string, bigint>();
   for (const r of live) if (r) byRoom.set(r.room, (byRoom.get(r.room) ?? BigInt(0)) + BigInt(r.amount));
@@ -26,7 +30,7 @@ function holdingLabel(room: RoomRef, amount: bigint, dec: number) {
 export async function checkAccess(session: Session | null, room: RoomRef, meta?: RoomMeta | null): Promise<Access> {
   if (!session) return { ok: false, holding: null };
   // 1. Outputs the user proved they own, re-checked for spends (selling the token ends access).
-  const proven = (await provenHoldings(session)).get(room.key);
+  const proven = (await provenHoldings(session, room.key)).get(room.key);
   if (proven) return { ok: true, holding: holdingLabel(room, proven, (meta ?? (await roomMeta(room.kind, room.id)))?.dec ?? 0) };
   // 2. Legacy fallback: GorillaPool's address index (also covers older wallets without per-output proofs).
   const onChain = await checkHoldings(session, room, meta);
