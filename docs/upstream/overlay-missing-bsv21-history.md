@@ -50,6 +50,16 @@ beef BEEF with 0 BUMPS and 0 Transactions, isValid true
 
 `inputBEEF` was valid (1 tx, 1 BUMP). The real problem is the separator. `parseOutpoint` in `@1sat/utils` accepts both `.` and `_`, but the input is forwarded to `createAction` unchanged. Normalising to `txid.vout` in the actions (or in the wallet) would avoid this.
 
+## Related: OrdLock v1 purchase unlock is under-sized when the wallet adds change outputs
+
+`buyBsv21` / `buyOrdinal` declare `unlockingScriptLength: 1402` for an OrdLock v1 listing input. The v1 purchase unlock embeds every output after the payout, including the wallet's change. Yours 5.1 splits change across ~8 outputs, so the real unlock was 1,670 bytes, and the wallet rejected it:
+
+```
+The args parameter must be spend unlockingScript length 3340 exceeds expected length 1402
+```
+
+(3340 hex chars = 1,670 bytes; 1,670 - 1,398 is roughly 8 x 34-byte P2PKH outputs.) Suggest estimating from the expected output count, or adding generous headroom; the declared length is only an upper bound for fee estimation. We work around it by adding 1,088 bytes of headroom to OrdLock inputs.
+
 ---
 
 Found while building 1satsocial (https://github.com/b0ase/1satsocial). Happy to test fixes.
