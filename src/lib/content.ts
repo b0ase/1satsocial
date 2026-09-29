@@ -1,9 +1,8 @@
-// Inscription content (token icons, collection art) fetched from whichever host answers fastest.
-// ordfs.network can take 40s+ for some files while GorillaPool serves the same bytes in under a second.
+// Inscription content (token icons, collection art): 1sat-stack's ORDFS first, other hosts only if it fails.
 const HOSTS = [
-  "https://ordinals.gorillapool.io/content",
   "https://api.1sat.app/content",
   "https://ordfs.network/content",
+  "https://ordinals.gorillapool.io/content",
 ];
 
 const OUTPOINT = /^[0-9a-f]{64}_\d{1,6}$/;

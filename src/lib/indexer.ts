@@ -4,6 +4,13 @@
 import { artUrl } from "./content";
 
 const GP = process.env.ORDINALS_API_URL || "https://ordinals.gorillapool.io/api";
+const ONESAT = process.env.ONESAT_API_URL || "https://api.1sat.app/1sat";
+
+async function onesat<T>(path: string): Promise<T> {
+  const res = await fetch(`${ONESAT}${path}`, { signal: AbortSignal.timeout(15_000), cache: "no-store" });
+  if (!res.ok) throw new Error(`1sat-stack ${res.status} for ${path}`);
+  return res.json() as Promise<T>;
+}
 
 type CacheEntry<T> = { value: T; expires: number };
 const g = globalThis as unknown as { __ssCache?: Map<string, CacheEntry<unknown>> };
@@ -106,22 +113,32 @@ export type RoomMeta = {
   dec: number;
 };
 
-type TokenInfo = { sym?: string; tick?: string; icon?: string; dec?: number; accounts?: number; max?: string; amt?: string };
-type Inscription = {
-  origin?: { data?: { map?: { name?: string; subTypeData?: { description?: string } }; insc?: { file?: { type?: string } } } };
-};
+type TokenInfo = { tick?: string; dec?: number; accounts?: number };
+type Bsv21Token = { token?: { sym?: string; icon?: string; dec?: string | number } };
+type OrdfsMetadata = { contentType?: string; map?: { name?: string; subTypeData?: string | { description?: string } } };
+
+function description(std: string | { description?: string } | undefined) {
+  if (typeof std === "object") return std?.description;
+  try {
+    return (JSON.parse(std ?? "") as { description?: string }).description;
+  } catch {
+    return undefined;
+  }
+}
 
 export function roomMeta(kind: string, id: string): Promise<RoomMeta | null> {
   return cached(`meta:${kind}:${id}`, 10 * 60_000, async () => {
     try {
+      // BSV-21 and collections come from 1sat-stack (overlay token record, ORDFS metadata). Holder counts aren't
+      // served there, so they're left out rather than fetched from another indexer.
       if (kind === "bsv21") {
-        const t = await gp<TokenInfo>(`/bsv20/id/${id}`);
+        const { token: t } = await onesat<Bsv21Token>(`/bsv21/${id}`);
         return {
-          title: `$${(t.sym ?? id.slice(0, 8)).replace(/^\$/, "")}`,
+          title: `$${(t?.sym ?? id.slice(0, 8)).replace(/^\$/, "")}`,
           subtitle: "BSV-21 token",
-          image: artUrl(t.icon),
-          holders: t.accounts ?? null,
-          dec: t.dec ?? 0,
+          image: artUrl(t?.icon),
+          holders: null,
+          dec: Number(t?.dec ?? 0) || 0,
         };
       }
       if (kind === "bsv20") {
@@ -129,13 +146,11 @@ export function roomMeta(kind: string, id: string): Promise<RoomMeta | null> {
         return { title: `$${(t.tick ?? id).replace(/^\$/, "")}`, subtitle: "BSV-20 token", image: null, holders: t.accounts ?? null, dec: t.dec ?? 0 };
       }
       if (kind === "coll") {
-        const i = await gp<Inscription>(`/inscriptions/${id}`);
-        const map = i.origin?.data?.map;
-        const isImage = i.origin?.data?.insc?.file?.type?.startsWith("image/");
+        const m = await onesat<OrdfsMetadata>(`/ordfs/metadata/${id.replace("_", ".")}`);
         return {
-          title: map?.name || `Collection ${id.slice(0, 8)}`,
-          subtitle: map?.subTypeData?.description?.slice(0, 140) || "1Sat Ordinals collection",
-          image: isImage ? artUrl(id) : null,
+          title: m.map?.name || `Collection ${id.slice(0, 8)}`,
+          subtitle: description(m.map?.subTypeData)?.slice(0, 140) || "1Sat Ordinals collection",
+          image: m.contentType?.startsWith("image/") ? artUrl(id) : null,
           holders: null,
           dec: 0,
         };

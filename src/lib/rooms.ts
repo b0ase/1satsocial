@@ -91,9 +91,12 @@ export async function eligibleRooms(session: Session): Promise<EligibleRoom[]> {
       });
     }),
   );
+  // Yours v5 (BRC-100) sessions list only proven holdings. The address-index scan is for legacy-provider sessions,
+  // whose single ordinals address is the proof.
+  const scan = session.wallet === "legacy" ? session.addresses : [];
   const [fungibles, colls] = await Promise.all([
-    Promise.all(session.addresses.map((a) => fungibleBalances(a).catch(() => []))),
-    Promise.all(session.addresses.map((a) => heldCollections(a).catch(() => new Map<string, number>()))),
+    Promise.all(scan.map((a) => fungibleBalances(a).catch(() => []))),
+    Promise.all(scan.map((a) => heldCollections(a).catch(() => new Map<string, number>()))),
   ]);
   for (const h of fungibles.flat()) {
     const ref = parseRoom(h.kind, h.key);

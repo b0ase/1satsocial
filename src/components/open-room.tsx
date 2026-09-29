@@ -14,7 +14,7 @@ export function OpenRoom() {
       onSubmit={(e) => {
         e.preventDefault();
         const room = resolveRoomInput(value);
-        if (!room) return setError("Paste a BSV-21 token id, a BSV-20 tick, or a collection id / 1sat.market link.");
+        if (!room) return setError("Paste a BSV-21 token id, or a collection id / 1sat.market link.");
         router.push(roomPath(room));
       }}
       className="flex flex-col gap-2"
@@ -26,7 +26,7 @@ export function OpenRoom() {
             setValue(e.target.value);
             setError(null);
           }}
-          placeholder="Token id, $TICK, or collection link"
+          placeholder="Token id or collection link"
           className="min-w-0 flex-1 rounded-full border border-line bg-panel-2 px-4 py-2.5 text-sm outline-none placeholder:text-muted focus:border-gold/60"
         />
         <button className="rounded-full border border-gold/60 px-4 text-sm text-gold hover:bg-gold-soft">Open</button>

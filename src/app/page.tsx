@@ -26,8 +26,8 @@ export default async function Home() {
             </span>
           </h1>
           <p className="mt-4 max-w-xl text-lg text-muted">
-            Group chats for every BSV-21 token, BSV-20 tick and 1Sat collection. Hold it and you&apos;re in. Don&apos;t
-            yet? Buy in with Yours in one step.
+            Group chats for every BSV-21 token and 1Sat collection. Prove you hold it with one approval in Yours and
+            you&apos;re in. Don&apos;t yet? Buy in with Yours in one step.
           </p>
         </div>
         <div className="w-full max-w-sm lg:pb-2">
