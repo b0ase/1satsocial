@@ -19,9 +19,11 @@ async function networkAccepted(txid: string): Promise<boolean> {
     const { txStatus } = (await arc.json()) as { txStatus?: string };
     return !!txStatus && ACCEPTED.has(txStatus);
   }
-  // Not broadcast through the 1Sat broadcaster: accept if 1sat-stack already has the transaction.
+  // Not broadcast through the 1Sat broadcaster: accept if 1sat-stack or JungleBus has seen it on the network.
   const beef = await get(`${ONESAT}/beef/${txid}/tx`).catch(() => null);
-  return !!beef?.ok;
+  if (beef?.ok) return true;
+  const jb = await get(`https://junglebus.gorillapool.io/v1/transaction/get/${txid}`).catch(() => null);
+  return !!jb?.ok;
 }
 
 export type ClaimResult = { ok: true; holding: string } | { ok: false; error: string };

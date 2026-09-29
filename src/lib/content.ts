@@ -1,5 +1,5 @@
-// Inscription content (token icons, collection art): 1sat-stack's ORDFS, with ordfs.network as a second ORDFS host.
-const HOSTS = ["https://api.1sat.app/content", "https://ordfs.network/content"];
+// Inscription content (token icons, collection art): 1sat-stack's ORDFS first, then other hosts if it fails.
+const HOSTS = ["https://api.1sat.app/content", "https://ordinals.gorillapool.io/content", "https://ordfs.network/content"];
 
 const OUTPOINT = /^[0-9a-f]{64}_\d{1,6}$/;
 export const MAX_ART_BYTES = 8_000_000;
