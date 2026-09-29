@@ -219,7 +219,7 @@ const sharedBoard = unstable_cache(
     if (degraded(b)) throw new Error("degraded hot board");
     return b;
   },
-  ["hot-board-v1"],
+  ["hot-board-v2"],
   { revalidate: 60 },
 );
 
