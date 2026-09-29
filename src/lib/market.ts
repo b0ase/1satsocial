@@ -60,9 +60,14 @@ async function overlayValid(tokenId: string, outpoints: string[]): Promise<Set<s
 async function loadMarket(room: RoomRef, limit: number): Promise<RoomMarket> {
   if (room.kind === "bsv21" || room.kind === "bsv20") {
     const filter = room.kind === "bsv21" ? `id=${room.id}` : `tick=${encodeURIComponent(room.id)}`;
-    const rows = (await get<TokenListing[]>(`${GP}/bsv20/market?${filter}&sort=price_per_token&dir=asc&limit=20`)).filter(
-      (r, i, all) => Number(r.price) > 0 && BigInt(r.amt) > BigInt(0) && all.findIndex((x) => x.outpoint === r.outpoint) === i,
-    );
+    // Cheapest total price = cheapest way into the room; the per-token floor is fetched separately.
+    const [byPrice, byPerToken] = await Promise.all([
+      get<TokenListing[]>(`${GP}/bsv20/market?${filter}&sort=price&dir=asc&limit=30`),
+      get<TokenListing[]>(`${GP}/bsv20/market?${filter}&sort=price_per_token&dir=asc&limit=5`).catch(() => []),
+    ]);
+    const sane = (r: TokenListing, i: number, all: TokenListing[]) =>
+      Number(r.price) > 0 && BigInt(r.amt) > BigInt(0) && all.findIndex((x) => x.outpoint === r.outpoint) === i;
+    const rows = byPrice.filter(sane);
     // BSV-20 (tick) purchases aren't supported by the SDK; those link out to 1sat.market.
     const valid = room.kind === "bsv21" ? await overlayValid(room.id, rows.map((r) => r.outpoint)) : new Set<string>();
     const listings = rows.map((r): Listing => {
@@ -77,11 +82,12 @@ async function loadMarket(room: RoomRef, limit: number): Promise<RoomMarket> {
         buyable: valid.has(r.outpoint),
       };
     });
-    // Buyable first, then cheapest per token (the indexer already sorted by price per token).
-    listings.sort((a, b) => Number(b.buyable) - Number(a.buyable));
+    // Buyable first, cheapest first within each group.
+    listings.sort((a, b) => Number(b.buyable) - Number(a.buyable) || a.priceSats - b.priceSats);
     // The indexer's pricePer is rounded to whole sats; compute the real per-token price.
     const perToken = (r: TokenListing) => Number(r.price) / (Number(r.amt) / 10 ** r.dec);
-    const floor = rows.length ? Math.min(...rows.map(perToken)) : null;
+    const floorRows = [...byPerToken.filter(sane), ...rows];
+    const floor = floorRows.length ? Math.min(...floorRows.map(perToken)) : null;
     return {
       listings: listings.slice(0, limit),
       floorLabel: floor === null ? null : `${formatPerToken(floor)} / token`,

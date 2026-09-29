@@ -7,6 +7,7 @@ import type { RoomKind } from "@/lib/room-ref";
 import { signIn } from "@/lib/wallet-client";
 
 function sats(n: number) {
+  if (n === 1) return "1 sat";
   return n >= 1e8 ? `${(n / 1e8).toLocaleString("en-US", { maximumFractionDigits: 4 })} BSV` : `${n.toLocaleString("en-US")} sats`;
 }
 
@@ -63,7 +64,7 @@ export function BuyPanel(props: {
   return (
     <div className="w-full max-w-lg text-left">
       <div className="mb-3 flex items-baseline justify-between">
-        <h3 className="font-medium">Buy in</h3>
+        <h3 className="font-medium">Cheapest ways in</h3>
         {props.floorLabel && <span className="text-sm text-muted">Floor {props.floorLabel}</span>}
       </div>
 
