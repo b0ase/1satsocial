@@ -1,5 +1,7 @@
 # 1satsocial
 
+**Live: https://1satsocial.vercel.app**
+
 Holder-only group chats for 1Sat Ordinals on BSV. Every BSV-21 token, BSV-20 tick and 1Sat collection gets a room. Only wallets holding that token can read or post. Sign in with Yours Wallet.
 
 ## How it works
@@ -18,6 +20,10 @@ Holder-only group chats for 1Sat Ordinals on BSV. Every BSV-21 token, BSV-20 tic
 6. **Market.** `/market` ranks rooms by recent 1sat.market trades plus chat activity, with floor, holders and a buy/enter action. The home page shows the top 12.
 
 Rooms: `/r/bsv21/<txid_vout>`, `/r/bsv20/<TICK>`, `/r/coll/<collection origin outpoint>`.
+
+## Deploy
+
+Vercel project `b0ase/1satsocial`, auto-deployed from `main`. Postgres is Neon via the Vercel Marketplace (`DATABASE_URL`). `SESSION_SECRET` is set per environment in Vercel.
 
 ## Develop
 
