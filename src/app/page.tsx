@@ -2,10 +2,10 @@ import Link from "next/link";
 import { Suspense } from "react";
 import { HotBoard } from "@/components/hot-board";
 import { OpenRoom } from "@/components/open-room";
-import { RoomCard } from "@/components/room-card";
+import { RoomAvatar, RoomCard } from "@/components/room-card";
 import { hotBoard } from "@/lib/hot";
 import { roomMeta } from "@/lib/indexer";
-import { eligibleRooms, roomFromKey } from "@/lib/rooms";
+import { eligibleRooms, roomFromKey, roomPath } from "@/lib/rooms";
 import { getSession, type Session } from "@/lib/session";
 import { store } from "@/lib/store";
 
@@ -35,18 +35,15 @@ export default async function Home() {
         </div>
       </section>
 
-      <Suspense fallback={<BoardSkeleton />}>
-        <LiveBoard />
-      </Suspense>
-
       {session && (
-        <section className="mt-16">
-          <h2 className="mb-5 text-2xl font-semibold tracking-tight">Your rooms</h2>
-          <Suspense fallback={<GridSkeleton />}>
-            <YourRooms session={session} />
-          </Suspense>
-        </section>
+        <Suspense fallback={<StripSkeleton />}>
+          <YourRooms session={session} />
+        </Suspense>
       )}
+
+      <Suspense fallback={<BoardSkeleton />}>
+        <LiveBoard session={session} />
+      </Suspense>
 
       <Suspense fallback={null}>
         <ChattingNow />
@@ -68,33 +65,57 @@ export default async function Home() {
   );
 }
 
-async function LiveBoard() {
-  const board = await hotBoard();
+async function LiveBoard({ session }: { session: Session | null }) {
+  const [board, mine] = await Promise.all([
+    hotBoard(),
+    session?.addresses.length ? eligibleRooms(session).catch(() => []) : Promise.resolve([]),
+  ]);
   if (!board.rooms.length) {
     return <Empty>Market data is unavailable right now. Try again in a moment.</Empty>;
   }
-  return <HotBoard initial={board} />;
+  return <HotBoard initial={board} heldKeys={mine.map((r) => r.key)} />;
 }
 
+/** Signed-in users see the rooms they can walk into, first. */
 async function YourRooms({ session }: { session: Session }) {
   const rooms = session.addresses.length ? await eligibleRooms(session) : [];
-  if (rooms.length === 0) {
-    return (
-      <Empty>
-        <span className="block font-medium text-text">You don&apos;t hold any 1Sat tokens or collection items yet.</span>
-        <span className="mt-1 block">
-          Pick something hot above, buy in, and the room opens straight away. Assets from an older Yours version need to
-          be imported into your current wallet first.
-        </span>
-      </Empty>
-    );
-  }
   return (
-    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-      {rooms.map((r) => (
-        <RoomCard key={r.key} kind={r.kind} id={r.id} title={r.title} image={r.image} detail={`You hold ${r.holding}`} />
-      ))}
-    </div>
+    <section className="mt-10" aria-labelledby="your-rooms">
+      <div className="mb-3 flex items-baseline justify-between gap-4">
+        <h2 id="your-rooms" className="text-sm font-medium uppercase tracking-[0.14em] text-muted">
+          Your rooms {rooms.length > 0 && <span className="text-gold">· {rooms.length}</span>}
+        </h2>
+        <Link href="/rooms" className="text-sm text-gold hover:underline">
+          {rooms.length ? "All my rooms →" : "Refresh holdings →"}
+        </Link>
+      </div>
+      {rooms.length === 0 ? (
+        <p className="rounded-2xl border border-dashed border-line px-5 py-4 text-sm text-muted">
+          No rooms yet. Pick something hot below and buy in: the room opens straight away.
+        </p>
+      ) : (
+        <ul className="flex gap-3 overflow-x-auto pb-2 [scrollbar-width:thin]">
+          {rooms.map((r) => (
+            <li key={r.key} className="shrink-0">
+              <Link
+                href={roomPath(r)}
+                className="group flex items-center gap-3 rounded-2xl border border-gold/30 bg-gold-soft py-2 pl-2 pr-4 transition hover:border-gold/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold"
+              >
+                <RoomAvatar title={r.title} image={r.image} size="h-10 w-10" />
+                <span className="flex flex-col">
+                  <span className="text-sm font-medium group-hover:text-gold">{r.title}</span>
+                  <span className="text-xs text-muted">
+                    {r.holding}
+                    {r.confirming ? " · confirming" : ""}
+                  </span>
+                </span>
+                <span className="ml-2 rounded-full bg-gold px-3 py-1 text-xs font-medium text-black">Enter</span>
+              </Link>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
   );
 }
 
@@ -138,14 +159,8 @@ function Empty({ children }: { children: React.ReactNode }) {
   return <p className="rounded-2xl border border-dashed border-line p-6 text-sm text-muted">{children}</p>;
 }
 
-function GridSkeleton() {
-  return (
-    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-      {Array.from({ length: 3 }, (_, i) => (
-        <div key={i} className="h-[70px] animate-pulse rounded-xl border border-line bg-panel" />
-      ))}
-    </div>
-  );
+function StripSkeleton() {
+  return <div className="mt-10 h-[84px] animate-pulse rounded-2xl border border-line bg-panel" />;
 }
 
 function BoardSkeleton() {

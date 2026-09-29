@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import type { HotBoard as Board, HotRoom, TickerItem } from "@/lib/hot";
@@ -23,23 +24,61 @@ function ago(m: number | null) {
   return `${Math.round(m / 1440)}d ago`;
 }
 
-function Art({ room, className = "" }: { room: Pick<HotRoom, "image" | "title">; className?: string }) {
-  // Inscriptions can be slow, huge or in formats the browser can't show: fall back to initials, never a broken icon.
-  const [failed, setFailed] = useState<string | null>(null);
-  return room.image && failed !== room.image ? (
-    // Inscription content from ORDFS in arbitrary formats: plain img on purpose.
-    // eslint-disable-next-line @next/next/no-img-element
-    <img src={room.image} alt="" onError={() => setFailed(room.image)} className={`object-cover ${className}`} />
-  ) : (
-    <div className={`grid place-items-center bg-gradient-to-br from-gold/30 via-panel-2 to-panel text-gold ${className}`}>
+/**
+ * Token/collection artwork. Tries the Next image optimiser first (resized, AVIF/WebP, cached for a year: inscription
+ * content never changes), then the original file (e.g. SVG, which the optimiser won't process), then initials.
+ */
+function Art({
+  room,
+  className = "",
+  sizes,
+  priority = false,
+  quality = 75,
+}: {
+  room: Pick<HotRoom, "image" | "title">;
+  className?: string;
+  sizes: string;
+  priority?: boolean;
+  quality?: 40 | 75;
+}) {
+  const [stage, setStage] = useState<{ src: string | null; step: "optimised" | "original" | "failed" }>({
+    src: room.image,
+    step: "optimised",
+  });
+  const step = stage.src === room.image ? stage.step : "optimised"; // reset when the artwork changes
+  const fail = (next: "original" | "failed") => setStage({ src: room.image, step: next });
+
+  if (room.image && step === "optimised") {
+    return (
+      <Image
+        src={room.image}
+        alt=""
+        fill
+        sizes={sizes}
+        quality={quality}
+        priority={priority}
+        onError={() => fail("original")}
+        className={`object-cover ${className}`}
+      />
+    );
+  }
+  if (room.image && step === "original") {
+    return (
+      // eslint-disable-next-line @next/next/no-img-element
+      <img src={room.image} alt="" onError={() => fail("failed")} className={`absolute inset-0 h-full w-full object-cover ${className}`} />
+    );
+  }
+  return (
+    <div className={`absolute inset-0 grid place-items-center bg-gradient-to-br from-gold/30 via-panel-2 to-panel text-gold ${className}`}>
       <span className="text-[length:inherit] font-semibold">{room.title.replace("$", "").slice(0, 2)}</span>
     </div>
   );
 }
 
 /** Live marketplace board: rotating spotlight, activity ticker, and the hot grid. Refreshes itself. */
-export function HotBoard({ initial }: { initial: Board }) {
+export function HotBoard({ initial, heldKeys = [] }: { initial: Board; heldKeys?: string[] }) {
   const [board, setBoard] = useState(initial);
+  const held = new Set(heldKeys);
 
   useEffect(() => {
     const t = setInterval(async () => {
@@ -52,12 +91,14 @@ export function HotBoard({ initial }: { initial: Board }) {
 
   return (
     <>
-      <Spotlight rooms={board.rooms.slice(0, SPOTLIGHT)} usd={board.usdPerBsv} />
+      <Spotlight rooms={board.rooms.slice(0, SPOTLIGHT)} usd={board.usdPerBsv} held={held} />
       <Ticker items={board.ticker} usd={board.usdPerBsv} />
-      <HotGrid rooms={board.rooms} usd={board.usdPerBsv} />
+      <HotGrid rooms={board.rooms} usd={board.usdPerBsv} held={held} />
     </>
   );
 }
+
+const keyOf = (r: Pick<HotRoom, "kind" | "id">) => `${r.kind}:${r.id}`;
 
 function Stat({ label, value, sub, accent }: { label: string; value: string; sub?: string; accent?: boolean }) {
   return (
@@ -69,38 +110,49 @@ function Stat({ label, value, sub, accent }: { label: string; value: string; sub
   );
 }
 
-function Spotlight({ rooms, usd }: { rooms: HotRoom[]; usd: number | null }) {
+function Spotlight({ rooms, usd, held }: { rooms: HotRoom[]; usd: number | null; held: Set<string> }) {
   const [index, setIndex] = useState(0);
   const i = rooms.length ? index % rooms.length : 0;
   const room = rooms[i];
   if (!room) return null;
   const perToken = room.kind !== "coll";
+  const isHeld = held.has(keyOf(room));
 
   return (
     <section aria-label="Trending now" className="pause-on-hover relative mt-8 overflow-hidden rounded-3xl border border-line bg-panel">
-      {/* Ambient backdrop from the artwork itself */}
-      <div key={`bg-${room.kind}:${room.id}`} aria-hidden className="animate-rise pointer-events-none absolute inset-0">
-        {room.image && (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img src={room.image} alt="" className="h-full w-full scale-125 object-cover opacity-30 blur-3xl saturate-150" />
-        )}
+      {/* Ambient backdrop from the artwork. All slides are mounted (so every image is loaded before its turn);
+          only the active one is visible, which also gives a clean crossfade. */}
+      <div aria-hidden className="pointer-events-none absolute inset-0">
+        {rooms.map((r, n) => (
+          <div key={keyOf(r)} className={`absolute inset-0 transition-opacity duration-700 ${n === i ? "opacity-30" : "opacity-0"}`}>
+            {r.image && (
+              <div className="absolute inset-0 scale-125 blur-3xl saturate-150">
+                <Art room={r} sizes="320px" quality={40} />
+              </div>
+            )}
+          </div>
+        ))}
         <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top_right,var(--gold-soft),transparent_60%)]" />
         <div className="absolute inset-0 bg-gradient-to-r from-panel via-panel/85 to-panel/40" />
       </div>
 
       <div className="relative grid gap-8 p-6 sm:p-10 md:grid-cols-[minmax(0,300px)_1fr] md:items-center md:gap-12">
-        <Link
-          key={`art-${room.kind}:${room.id}`}
-          href={roomPath(room)}
-          className="animate-rise group relative mx-auto block aspect-square w-56 sm:w-64 md:w-full"
-        >
+        <Link href={roomPath(room)} className="group relative mx-auto block aspect-square w-56 sm:w-64 md:w-full" aria-label={room.title}>
           <div className="absolute -inset-6 rounded-[2rem] bg-gold/20 opacity-60 blur-2xl transition-opacity duration-300 group-hover:opacity-90" />
-          <div className="animate-float relative h-full w-full overflow-hidden rounded-3xl shadow-2xl ring-1 ring-white/10">
-            <Art room={room} className="h-full w-full text-7xl" />
+          <div className="animate-float relative h-full w-full overflow-hidden rounded-3xl bg-panel-2 shadow-2xl ring-1 ring-white/10">
+            {rooms.map((r, n) => (
+              <div
+                key={keyOf(r)}
+                aria-hidden={n !== i}
+                className={`absolute inset-0 text-7xl transition-all duration-500 ${n === i ? "scale-100 opacity-100" : "scale-[1.03] opacity-0"}`}
+              >
+                <Art room={r} sizes="(min-width: 768px) 300px, 256px" priority={n === 0} />
+              </div>
+            ))}
           </div>
         </Link>
 
-        <div key={`copy-${room.kind}:${room.id}`} className="animate-rise min-w-0">
+        <div key={`copy-${keyOf(room)}`} className="animate-rise min-w-0">
           <p className="flex items-center gap-2 text-xs font-medium uppercase tracking-[0.18em] text-gold">
             <span className="animate-live h-2 w-2 rounded-full bg-emerald-400" />
             Live · #{i + 1} hottest on 1Sat
@@ -108,6 +160,7 @@ function Spotlight({ rooms, usd }: { rooms: HotRoom[]; usd: number | null }) {
           <h2 className="mt-3 break-words text-5xl font-semibold leading-[0.95] tracking-tight sm:text-6xl lg:text-7xl">{room.title}</h2>
           <p className="mt-3 text-muted">
             {KIND[room.kind]} · holder-only chat room
+            {isHeld && <span className="ml-2 rounded-full bg-emerald-400/15 px-2 py-0.5 text-xs text-emerald-300">You&apos;re a holder</span>}
           </p>
 
           <div className="mt-8 grid grid-cols-2 gap-x-8 gap-y-5 sm:grid-cols-4">
@@ -133,14 +186,16 @@ function Spotlight({ rooms, usd }: { rooms: HotRoom[]; usd: number | null }) {
               href={roomPath(room)}
               className="rounded-full bg-gold px-6 py-3 font-medium text-black shadow-[0_0_40px_-8px_var(--gold)] transition hover:brightness-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
             >
-              Buy in &amp; join the chat
+              {isHeld ? "Enter the chat" : "Buy in & join the chat"}
             </Link>
-            <Link
-              href={roomPath(room)}
-              className="rounded-full border border-line bg-bg/40 px-6 py-3 font-medium backdrop-blur transition hover:border-gold/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold"
-            >
-              See listings
-            </Link>
+            {!isHeld && (
+              <Link
+                href={roomPath(room)}
+                className="rounded-full border border-line bg-bg/40 px-6 py-3 font-medium backdrop-blur transition hover:border-gold/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold"
+              >
+                See listings
+              </Link>
+            )}
           </div>
         </div>
       </div>
@@ -167,8 +222,8 @@ function Spotlight({ rooms, usd }: { rooms: HotRoom[]; usd: number | null }) {
               )}
               {n < i && <span className="block h-full bg-gold/40" />}
             </span>
-            <span className="h-8 w-8 shrink-0 overflow-hidden rounded-md ring-1 ring-white/10">
-              <Art room={r} className="h-full w-full text-xs" />
+            <span className="relative h-8 w-8 shrink-0 overflow-hidden rounded-md text-xs ring-1 ring-white/10">
+              <Art room={r} sizes="32px" />
             </span>
             <span className={`truncate text-sm ${n === i ? "text-text" : "text-muted group-hover:text-text"}`}>{r.title}</span>
           </button>
@@ -230,7 +285,7 @@ function Flame() {
   );
 }
 
-function HotGrid({ rooms, usd }: { rooms: HotRoom[]; usd: number | null }) {
+function HotGrid({ rooms, usd, held }: { rooms: HotRoom[]; usd: number | null; held: Set<string> }) {
   if (!rooms.length) return null;
   const top = rooms[0]?.heat || 1;
   return (
@@ -253,12 +308,21 @@ function HotGrid({ rooms, usd }: { rooms: HotRoom[]; usd: number | null }) {
             href={roomPath(r)}
             className="group relative overflow-hidden rounded-2xl border border-line bg-panel transition duration-200 hover:-translate-y-0.5 hover:border-gold/50 hover:shadow-[0_18px_50px_-20px_var(--gold)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold"
           >
-            <div className="relative aspect-[4/3] overflow-hidden">
-              <Art room={r} className="h-full w-full text-4xl transition duration-500 group-hover:scale-105" />
+            <div className="relative aspect-[4/3] overflow-hidden text-4xl">
+              <Art
+                room={r}
+                sizes="(min-width: 1024px) 280px, (min-width: 640px) 33vw, 50vw"
+                className="transition duration-500 group-hover:scale-105"
+              />
               <div className="absolute inset-0 bg-gradient-to-t from-panel via-panel/10 to-transparent" />
               <span className="absolute left-2.5 top-2.5 rounded-full bg-bg/70 px-2 py-0.5 text-xs font-semibold tabular-nums backdrop-blur">
                 #{n + 1}
               </span>
+              {held.has(keyOf(r)) && (
+                <span className="absolute bottom-2.5 left-2.5 rounded-full bg-emerald-400/90 px-2 py-0.5 text-xs font-medium text-black">
+                  You&apos;re in
+                </span>
+              )}
               <span className="absolute right-2.5 top-2.5 flex items-center gap-1 rounded-full bg-bg/70 px-2 py-0.5 text-xs text-gold backdrop-blur">
                 <Flame />
                 {Math.max(1, Math.round((r.heat / top) * 100))}

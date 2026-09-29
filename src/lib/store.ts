@@ -21,6 +21,7 @@ interface Store {
   /** False if this transaction has already been claimed for the room (by anyone). */
   addGrant(g: Grant): Promise<boolean>;
   activeGrant(room: string, userId: string): Promise<Grant | null>;
+  activeGrantsFor(userId: string): Promise<Grant[]>;
 }
 
 // ---- In-memory store (dev / no DATABASE_URL). Survives HMR, not restarts.
@@ -46,6 +47,10 @@ class MemoryStore implements Store {
   async activeGrant(room: string, userId: string) {
     const now = new Date().toISOString();
     return this.grants.find((g) => g.room === room && g.userId === userId && g.expiresAt > now) ?? null;
+  }
+  async activeGrantsFor(userId: string) {
+    const now = new Date().toISOString();
+    return this.grants.filter((g) => g.userId === userId && g.expiresAt > now);
   }
   async add(m: Omit<Message, "id" | "createdAt">) {
     const row = { ...m, id: ++this.data.seq, createdAt: new Date().toISOString() };
@@ -139,6 +144,18 @@ class PgStore implements Store {
     return r
       ? { room: r.room, userId: r.user_id, txid: r.txid, holding: r.holding, expiresAt: new Date(r.expires_at).toISOString() }
       : null;
+  }
+  async activeGrantsFor(userId: string) {
+    await this.ready;
+    const rows = await this.sql`
+      select * from ss_grants where user_id = ${userId} and expires_at > now() order by expires_at desc`;
+    return rows.map((r) => ({
+      room: r.room,
+      userId: r.user_id,
+      txid: r.txid,
+      holding: r.holding,
+      expiresAt: new Date(r.expires_at).toISOString(),
+    }));
   }
   async activeRooms(limit: number) {
     await this.ready;

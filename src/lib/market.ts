@@ -1,5 +1,6 @@
 // Marketplace data for rooms: cheapest live listings (buyable in-app) and floor prices.
-import { CONTENT_URL, formatAmount, roomMeta } from "./indexer";
+import { artUrl } from "./content";
+import { formatAmount, roomMeta } from "./indexer";
 import type { RoomRef } from "./room-ref";
 
 const GP = process.env.ORDINALS_API_URL || "https://ordinals.gorillapool.io/api";
@@ -133,7 +134,7 @@ async function loadMarket(room: RoomRef, limit: number): Promise<RoomMarket> {
         label: r.origin?.data?.map?.name ?? meta?.title ?? "Item",
         image:
           r.origin?.outpoint && r.origin.data?.insc?.file?.type?.startsWith("image/")
-            ? `${CONTENT_URL}/${r.origin.outpoint}`
+            ? artUrl(r.origin.outpoint)
             : null,
         seller: r.owner,
         buyable: true,

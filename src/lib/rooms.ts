@@ -1,5 +1,6 @@
 import { collectionCount, fungibleBalances, formatAmount, heldCollections, roomMeta, type RoomMeta } from "./indexer";
-import { parseRoom, type RoomRef } from "./room-ref";
+import { artUrl } from "./content";
+import { parseRoom, roomFromKey, type RoomRef } from "./room-ref";
 import type { Session } from "./session";
 import { store } from "./store";
 
@@ -42,7 +43,13 @@ async function checkHoldings(session: Session, room: RoomRef, meta?: RoomMeta | 
   }
 }
 
-export type EligibleRoom = RoomRef & { title: string; image: string | null; holding: string };
+export type EligibleRoom = RoomRef & {
+  title: string;
+  image: string | null;
+  holding: string;
+  /** Access from a verified purchase the indexers haven't confirmed yet. */
+  confirming?: boolean;
+};
 
 /** Every room the session's addresses qualify for. */
 export async function eligibleRooms(session: Session): Promise<EligibleRoom[]> {
@@ -57,7 +64,7 @@ export async function eligibleRooms(session: Session): Promise<EligibleRoom[]> {
     out.set(ref.key, {
       ...ref,
       title: `$${h.symbol.replace(/^\$/, "")}`,
-      image: h.icon ? `${process.env.NEXT_PUBLIC_CONTENT_URL || "https://ordfs.network/content"}/${h.icon}` : null,
+      image: artUrl(h.icon),
       holding: formatAmount(h.amount, h.dec),
     });
   }
@@ -69,6 +76,22 @@ export async function eligibleRooms(session: Session): Promise<EligibleRoom[]> {
       if (!ref) return;
       const meta = await roomMeta("coll", ref.id);
       out.set(ref.key, { ...ref, title: meta?.title ?? `Collection ${id.slice(0, 8)}`, image: meta?.image ?? null, holding: `${n} item${n === 1 ? "" : "s"}` });
+    }),
+  );
+  // Rooms unlocked by a just-verified purchase (instant access) that the indexers haven't caught up with.
+  const grants = await store.activeGrantsFor(session.userId).catch(() => []);
+  await Promise.all(
+    grants.map(async (g) => {
+      const ref = roomFromKey(g.room);
+      if (!ref || out.has(ref.key)) return;
+      const meta = await roomMeta(ref.kind, ref.id);
+      out.set(ref.key, {
+        ...ref,
+        title: meta?.title ?? ref.id.slice(0, 12),
+        image: meta?.image ?? null,
+        holding: g.holding,
+        confirming: true,
+      });
     }),
   );
   return [...out.values()];

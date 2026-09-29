@@ -1,4 +1,5 @@
 import { ImageResponse } from "next/og";
+import { fetchContent } from "@/lib/content";
 import { roomMeta } from "@/lib/indexer";
 import { roomMarket } from "@/lib/market";
 import { parseRoom } from "@/lib/room-ref";
@@ -13,17 +14,11 @@ const GOLD = "#e8b04a";
 const RENDERABLE = ["image/png", "image/jpeg", "image/gif", "image/svg+xml"];
 
 async function iconDataUrl(url: string | null): Promise<string | null> {
-  if (!url) return null;
-  try {
-    const res = await fetch(url, { signal: AbortSignal.timeout(5_000) });
-    const type = res.headers.get("content-type")?.split(";")[0] ?? "";
-    if (!res.ok || !RENDERABLE.includes(type)) return null;
-    const buf = Buffer.from(await res.arrayBuffer());
-    if (buf.length > 1_500_000) return null;
-    return `data:${type};base64,${buf.toString("base64")}`;
-  } catch {
-    return null;
-  }
+  const outpoint = url?.match(/^\/art\/([0-9a-f]{64}_\d+)$/)?.[1];
+  if (!outpoint) return null;
+  const content = await fetchContent(outpoint);
+  if (!content || !RENDERABLE.includes(content.type) || content.bytes.length > 1_500_000) return null;
+  return `data:${content.type};base64,${Buffer.from(content.bytes).toString("base64")}`;
 }
 
 const KIND_LABEL: Record<string, string> = { bsv21: "BSV-21 token", bsv20: "BSV-20 token", coll: "1Sat Ordinals collection" };

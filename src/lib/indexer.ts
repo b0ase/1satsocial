@@ -1,8 +1,9 @@
 // Server-side holdings verification against the GorillaPool 1Sat indexer.
 // Never trust the client about what it holds; always ask the chain.
 
+import { artUrl } from "./content";
+
 const GP = process.env.ORDINALS_API_URL || "https://ordinals.gorillapool.io/api";
-export const CONTENT_URL = process.env.NEXT_PUBLIC_CONTENT_URL || "https://ordfs.network/content";
 
 type CacheEntry<T> = { value: T; expires: number };
 const g = globalThis as unknown as { __ssCache?: Map<string, CacheEntry<unknown>> };
@@ -118,7 +119,7 @@ export function roomMeta(kind: string, id: string): Promise<RoomMeta | null> {
         return {
           title: `$${(t.sym ?? id.slice(0, 8)).replace(/^\$/, "")}`,
           subtitle: "BSV-21 token",
-          image: t.icon ? `${CONTENT_URL}/${t.icon}` : null,
+          image: artUrl(t.icon),
           holders: t.accounts ?? null,
           dec: t.dec ?? 0,
         };
@@ -134,7 +135,7 @@ export function roomMeta(kind: string, id: string): Promise<RoomMeta | null> {
         return {
           title: map?.name || `Collection ${id.slice(0, 8)}`,
           subtitle: map?.subTypeData?.description?.slice(0, 140) || "1Sat Ordinals collection",
-          image: isImage ? `${CONTENT_URL}/${id}` : null,
+          image: isImage ? artUrl(id) : null,
           holders: null,
           dec: 0,
         };

@@ -42,6 +42,11 @@ export default async function RootLayout({ children }: LayoutProps<"/">) {
               </span>
             </Link>
             <nav className="ml-auto mr-4 flex items-center gap-5 text-sm text-muted">
+              {session && (
+                <Link href="/rooms" className="font-medium text-text hover:text-gold">
+                  My rooms
+                </Link>
+              )}
               <Link href="/market" className="hover:text-text">
                 Market
               </Link>
