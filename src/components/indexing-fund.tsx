@@ -1,7 +1,8 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useCallback, useState } from "react";
+import { ApprovalPanel, type Terms } from "@/components/approval-panel";
 import type { Indexing } from "@/lib/overlay";
 import { formatUsd } from "@/lib/price";
 
@@ -11,7 +12,13 @@ function sats(n: number) {
   return `${Math.round(n).toLocaleString("en-US")} sats`;
 }
 
-export function IndexingFund(props: { symbol: string; indexing: Indexing; usdPerBsv: number | null }) {
+export function IndexingFund(props: {
+  symbol: string;
+  tokenId: string;
+  indexing: Indexing;
+  usdPerBsv: number | null;
+  userId: string | null;
+}) {
   const router = useRouter();
   const { indexing: ix, usdPerBsv: usd } = props;
   const [open, setOpen] = useState(!ix.active);
@@ -21,16 +28,43 @@ export function IndexingFund(props: { symbol: string; indexing: Indexing; usdPer
   const outputsLeft = Math.floor(ix.balanceSats / ix.feePerOutput);
   const debt = ix.balanceSats < 0 ? -ix.balanceSats : 0;
 
-  async function fund(amountUsd: number) {
+  const [pendingSats, setPendingSats] = useState<number | null>(null);
+
+  function fund(amountUsd: number) {
     if (!usd) return;
-    const amount = Math.max(1000, Math.round((amountUsd / usd) * 1e8));
-    const ok = window.confirm(
-      `Send ${sats(amount)} (about ${formatUsd(amount, usd)}) to ${props.symbol}'s indexing fund?\n\n` +
-        `Fee address: ${ix.feeAddress}\nThis is a donation to keep the token indexed. It isn't refundable.`,
-    );
-    if (!ok) return;
-    setBusy(true);
     setMsg(null);
+    setPendingSats(Math.max(1000, Math.round((amountUsd / usd) * 1e8)));
+  }
+
+  const loadTerms = useCallback(async (): Promise<Terms> => {
+    const amount = pendingSats ?? 0;
+    const fee = 150; // plain one-output payment: ~250 bytes at ~150 sat/kB, rounded up
+    return {
+      kind: "indexing-fund",
+      title: `Fund ${props.symbol} indexing`,
+      site: window.location.host,
+      room: { name: props.symbol, kind: "bsv21", id: props.tokenId, url: window.location.href },
+      reference: {
+        Token: props.tokenId,
+        "Fee address check": "Matches on both the 1Sat overlay and GorillaPool",
+        "Indexing cost": `${ix.feePerOutput.toLocaleString("en-US")} sats per indexed transfer`,
+      },
+      receive: `About ${Math.floor(amount / ix.feePerOutput).toLocaleString("en-US")} more ${props.symbol} transfers indexed by the 1Sat overlay`,
+      lines: [{ label: "Donation to the indexing fund", address: ix.feeAddress, sats: amount, note: "Paid straight to the token's fee address" }],
+      estNetworkFeeSats: fee,
+      totalSats: amount + fee,
+      usdPerBsv: usd,
+      walletPrompts: ["Payment: approve a single BSV payment to the fee address in Yours."],
+      warnings: ["This is a donation. It isn't refundable and gives you no tokens.", "Blockchain payments are final."],
+      terms: [
+        "1satsocial never holds these funds; your wallet pays the fee address directly.",
+        "The overlay operator, not 1satsocial, decides how funds are applied to indexing.",
+      ],
+    };
+  }, [pendingSats, props.symbol, props.tokenId, ix.feeAddress, ix.feePerOutput, usd]);
+
+  async function pay(amount: number) {
+    setBusy(true);
     try {
       const { fundIndexing } = await import("@/lib/fund-client");
       const txid = await fundIndexing(ix.feeAddress, amount, props.symbol);
@@ -44,6 +78,20 @@ export function IndexingFund(props: { symbol: string; indexing: Indexing; usdPer
   }
 
   return (
+    <>
+      {pendingSats !== null && (
+        <ApprovalPanel
+          loadTerms={loadTerms}
+          approver={props.userId}
+          approveLabel="Approve & open Yours"
+          onClose={() => setPendingSats(null)}
+          onApprove={() => {
+            const amount = pendingSats;
+            setPendingSats(null);
+            void pay(amount);
+          }}
+        />
+      )}
     <div className={`mb-4 rounded-xl border px-4 py-3 text-sm ${ix.active ? "border-line bg-panel" : "border-yellow-900/70 bg-yellow-950/20"}`}>
       <button onClick={() => setOpen((o) => !o)} className="flex w-full items-center justify-between gap-3 text-left">
         <span className="flex items-center gap-2">
@@ -112,5 +160,6 @@ export function IndexingFund(props: { symbol: string; indexing: Indexing; usdPer
         </div>
       )}
     </div>
+    </>
   );
 }

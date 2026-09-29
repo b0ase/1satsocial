@@ -53,7 +53,7 @@ export default async function RoomPage({ params }: PageProps<"/r/[kind]/[id]">) 
         )}
       </div>
 
-      {indexing && meta && <IndexingFund symbol={meta.title} indexing={indexing} usdPerBsv={usdPerBsv} />}
+      {indexing && meta && <IndexingFund symbol={meta.title} tokenId={room.id} indexing={indexing} usdPerBsv={usdPerBsv} userId={session?.userId ?? null} />}
 
       {!meta && (
         <p className="mb-4 rounded-lg border border-yellow-900/60 bg-yellow-950/30 px-3 py-2 text-sm text-yellow-200/80">
