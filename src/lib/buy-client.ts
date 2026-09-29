@@ -33,11 +33,21 @@ export async function buyListing(req: BuyRequest): Promise<string> {
 
   if (conn) {
     const ctx = createContext(conn.wallet, { services: new OneSatServices("main"), chain: "main" });
+    // Route through the wallet's 1Sat permission module (how Yours v5 handles purchases itself).
+    // Building the transaction locally and passing inputBEEF across the extension boundary arrived
+    // empty on Yours 5.1 ("inputBEEF ... BEEF with 0 BUMPS and 0 Transactions").
     const result =
       req.kind === "coll"
-        ? await buyOrdinal.execute(ctx, { outpoint: req.outpoint, ...fee })
+        ? await buyOrdinal.execute(ctx, { outpoint: req.outpoint, ...fee, usePermissionModule: true, permissionScheme: "1sat" })
         : req.kind === "bsv21" && req.amount
-          ? await buyBsv21.execute(ctx, { tokenId: req.roomId, outpoint: req.outpoint, amount: req.amount, ...fee })
+          ? await buyBsv21.execute(ctx, {
+              tokenId: req.roomId,
+              outpoint: req.outpoint,
+              amount: req.amount,
+              ...fee,
+              usePermissionModule: true,
+              permissionScheme: "bsv21",
+            })
           : { error: "BSV-20 tick purchases aren't supported in-app yet" };
     if (result.error || !result.txid) throw new Error(friendly(result.error ?? "Purchase failed"));
     return result.txid;

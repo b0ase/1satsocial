@@ -19,7 +19,7 @@ async function cached<T>(key: string, ttlMs: number, fn: () => Promise<T>): Prom
 async function gp<T>(path: string): Promise<T> {
   const res = await fetch(`${GP}${path}`, {
     headers: { accept: "application/json" },
-    signal: AbortSignal.timeout(15_000),
+    signal: AbortSignal.timeout(30_000),
     cache: "no-store",
   });
   if (!res.ok) throw new Error(`Indexer ${res.status} for ${path}`);

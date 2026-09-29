@@ -61,7 +61,7 @@ async function loadMarket(room: RoomRef, limit: number): Promise<RoomMarket> {
   if (room.kind === "bsv21" || room.kind === "bsv20") {
     const filter = room.kind === "bsv21" ? `id=${room.id}` : `tick=${encodeURIComponent(room.id)}`;
     const rows = (await get<TokenListing[]>(`${GP}/bsv20/market?${filter}&sort=price_per_token&dir=asc&limit=20`)).filter(
-      (r) => Number(r.price) > 0 && BigInt(r.amt) > BigInt(0),
+      (r, i, all) => Number(r.price) > 0 && BigInt(r.amt) > BigInt(0) && all.findIndex((x) => x.outpoint === r.outpoint) === i,
     );
     // BSV-20 (tick) purchases aren't supported by the SDK; those link out to 1sat.market.
     const valid = room.kind === "bsv21" ? await overlayValid(room.id, rows.map((r) => r.outpoint)) : new Set<string>();
