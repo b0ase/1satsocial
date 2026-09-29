@@ -16,7 +16,36 @@ function sats(n: number) {
   return n >= 1e8 ? `${(n / 1e8).toLocaleString("en-US", { maximumFractionDigits: 4 })} BSV` : `${n.toLocaleString("en-US")} sats`;
 }
 
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+type Receipt = {
+  txid: string;
+  roomId: string;
+  label: string;
+  priceSats: number;
+  usd: string | null;
+  chatOnly: boolean;
+  at: string;
+};
+
+const RECEIPTS_KEY = "ss_receipts";
+const ACCESS_POLL_MS = 15_000;
+const ACCESS_POLL_FOR_MS = 30 * 60_000;
+
+// Receipts are a per-browser convenience so a reload doesn't lose proof of purchase; the chain is the record.
+function loadReceipts(): Receipt[] {
+  try {
+    return JSON.parse(localStorage.getItem(RECEIPTS_KEY) ?? "[]") as Receipt[];
+  } catch {
+    return [];
+  }
+}
+
+function saveReceipt(r: Receipt) {
+  try {
+    localStorage.setItem(RECEIPTS_KEY, JSON.stringify([r, ...loadReceipts()].slice(0, 50)));
+  } catch {
+    /* storage unavailable */
+  }
+}
 
 export function BuyPanel(props: {
   kind: RoomKind;
@@ -35,10 +64,41 @@ export function BuyPanel(props: {
   const [busy, setBusy] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [txid, setTxid] = useState<string | null>(null);
   const [balance, setBalance] = useState<number | null | "loading">(props.signedIn ? "loading" : null);
   // Fallback when the wallet won't share its balance: the viewer types a budget in dollars.
   const [budgetUsd, setBudgetUsd] = useState("");
+  const [receipts, setReceipts] = useState<Receipt[]>([]);
+  const [waiting, setWaiting] = useState(false);
+
+  // Restore receipts for this room; keep waiting for access if a purchase is recent.
+  useEffect(() => {
+    const mine = loadReceipts().filter((r) => r.roomId === props.roomId);
+    if (!mine.length) return;
+    queueMicrotask(() => {
+      setReceipts(mine);
+      if (Date.now() - Date.parse(mine[0].at) < ACCESS_POLL_FOR_MS) setWaiting(true);
+    });
+  }, [props.roomId]);
+
+  // After a purchase, keep checking until the indexer sees it (usually the next block, ~10 min).
+  useEffect(() => {
+    if (!waiting) return;
+    const started = Date.now();
+    const timer = setInterval(async () => {
+      if (Date.now() - started > ACCESS_POLL_FOR_MS) {
+        clearInterval(timer);
+        setWaiting(false);
+        return;
+      }
+      const res = await fetch(props.messagesApi).catch(() => null);
+      if (res?.ok) {
+        clearInterval(timer);
+        setWaiting(false);
+        router.refresh();
+      }
+    }, ACCESS_POLL_MS);
+    return () => clearInterval(timer);
+  }, [waiting, props.messagesApi, router]);
 
   async function loadBalance() {
     setBalance("loading");
@@ -103,22 +163,28 @@ export function BuyPanel(props: {
         amount: l.amount,
         chatOnly: l.chatOnly,
       });
-      setTxid(id);
+      const receipt: Receipt = {
+        txid: id,
+        roomId: props.roomId,
+        label: l.label,
+        priceSats: l.priceSats,
+        usd: usd ? formatUsd(l.priceSats, usd) : null,
+        chatOnly: l.chatOnly,
+        at: new Date().toISOString(),
+      };
+      saveReceipt(receipt);
+      setReceipts((r) => [receipt, ...r]);
+      setStatus(null);
 
-      // Re-prove holdings so the server sees the key the new token landed on.
-      await signIn(setStatus);
-      setStatus("Waiting for the indexer to see your purchase…");
-      for (let i = 0; i < 20; i++) {
-        const res = await fetch(props.messagesApi);
-        if (res.ok) {
-          setStatus("You're in.");
-          router.refresh();
-          return;
-        }
-        await sleep(3000);
+      // Re-prove holdings so the server sees the key the new token landed on. The purchase is already
+      // on-chain, so a failure here isn't fatal: Refresh holdings later picks the key up.
+      try {
+        await signIn(setStatus);
+      } catch {
+        /* receipt stands; access check below keeps running */
       }
       setStatus(null);
-      setError("Purchase sent, but the indexer hasn't caught up yet. Refresh holdings in a minute.");
+      setWaiting(true);
     } catch (e) {
       setStatus(null);
       setError(e instanceof Error ? e.message : "Purchase failed");
@@ -129,6 +195,33 @@ export function BuyPanel(props: {
 
   return (
     <div className="w-full max-w-2xl text-left">
+      {receipts.map((r) => (
+        <div key={r.txid} className="mb-4 rounded-xl border border-gold/40 bg-gold-soft p-4 text-sm">
+          <div className="flex items-center justify-between gap-3">
+            <p className="font-medium text-gold">Purchase complete</p>
+            <span className="text-xs text-muted">{new Date(r.at).toLocaleString()}</span>
+          </div>
+          <p className="mt-1">
+            You bought <span className="font-medium">{r.label}</span> for {sats(r.priceSats)}
+            {r.usd ? ` (${r.usd})` : ""}, plus network fees.
+          </p>
+          <p className="mt-2 text-muted">
+            {waiting
+              ? "Waiting for the next block (usually about 10 minutes). You'll be let in automatically. You can leave this page open."
+              : "If the room hasn't opened yet, choose Refresh holdings in the account menu."}
+            {r.chatOnly && " These are chat-access tokens, so Yours may not show them yet."}
+          </p>
+          <a
+            href={`https://whatsonchain.com/tx/${r.txid}`}
+            target="_blank"
+            rel="noreferrer"
+            className="mt-2 inline-block break-all text-xs text-muted underline hover:text-text"
+          >
+            Receipt on-chain: {r.txid}
+          </a>
+        </div>
+      ))}
+
       <div className="mb-3 flex items-baseline justify-between">
         <h3 className="font-medium">Cheapest ways in</h3>
         {props.floorLabel && <span className="text-sm text-muted">Floor {props.floorLabel}</span>}
@@ -222,14 +315,6 @@ export function BuyPanel(props: {
 
       {status && <p className="mt-3 text-sm text-gold">{status}</p>}
       {error && <p className="mt-3 text-sm text-red-400">{error}</p>}
-      {txid && (
-        <p className="mt-2 text-xs text-muted">
-          Tx{" "}
-          <a href={`https://whatsonchain.com/tx/${txid}`} target="_blank" rel="noreferrer" className="underline">
-            {txid.slice(0, 12)}…
-          </a>
-        </p>
-      )}
       <p className="mt-3 text-xs text-muted">
         Purchases are paid from your Yours Wallet and settle on-chain. Prices are set by sellers on the 1Sat orderbook.
       </p>
