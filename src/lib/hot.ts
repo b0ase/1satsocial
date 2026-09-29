@@ -2,7 +2,7 @@
 // what's just been listed and sold. Built from 1sat-stack's market API plus chat activity.
 import { unstable_cache } from "next/cache";
 import { formatAmount, roomMeta } from "./indexer";
-import { recentListings, type RecentListing } from "./listings";
+import { activeTokens, recentListings, type RecentListing } from "./listings";
 import { roomMarket } from "./market";
 import { bsvUsd } from "./price";
 import { parseRoom, roomFromKey, type RoomKind, type RoomRef } from "./room-ref";
@@ -59,9 +59,10 @@ async function tipHeight(): Promise<number | null> {
 }
 
 async function build(): Promise<HotBoard> {
-  const [newListings, sales, active, tip, usd] = await Promise.all([
+  const [newListings, sales, tokens, active, tip, usd] = await Promise.all([
     recentListings("active").catch((): RecentListing[] => []),
     recentListings("sale").catch((): RecentListing[] => []),
+    activeTokens(20).catch((): string[] => []),
     store.activeRooms(100).catch(() => []),
     tipHeight(),
     bsvUsd(),
@@ -84,6 +85,8 @@ async function build(): Promise<HotBoard> {
     const a = touch(parseRoom(l.kind, l.id));
     if (a) a.trades++;
   }
+  // Active overlay tokens are candidates; their live listings are counted once their market is loaded below.
+  for (const id of tokens) touch(parseRoom("bsv21", id));
   for (const c of active) {
     const a = touch(roomFromKey(c.room));
     if (a) {
@@ -92,13 +95,15 @@ async function build(): Promise<HotBoard> {
     }
   }
   const heat = (a: Acc) => a.trades + a.newListings * 2 + a.chatMessages * 2 + a.chatMembers * 5;
-  const ranked = [...rooms.values()].sort((x, y) => heat(y) - heat(x)).slice(0, 18);
 
   const enriched = await Promise.all(
-    ranked.map(async (a): Promise<HotRoom | null> => {
-      const meta = await roomMeta(a.ref.kind, a.ref.id);
+    [...rooms.values()].map(async (a): Promise<HotRoom | null> => {
+      const [meta, market] = await Promise.all([roomMeta(a.ref.kind, a.ref.id), roomMarket(a.ref).catch(() => null)]);
       if (!meta) return null;
-      const market = await roomMarket(a.ref).catch(() => null);
+      // Tokens: live listings that can be bought in-app count as fresh supply.
+      if (a.ref.kind === "bsv21") a.newListings = market?.buyableCount ?? 0;
+      // Nothing to buy and nobody chatting: not hot.
+      if (!market?.live && !a.chatMessages && !a.trades) return null;
       return {
         kind: a.ref.kind,
         id: a.ref.id,
@@ -132,7 +137,11 @@ async function build(): Promise<HotBoard> {
   ticker.sort((a, b) => (a.minutesAgo ?? -1) - (b.minutesAgo ?? -1));
 
   const board: HotBoard = {
-    rooms: enriched.filter((r): r is HotRoom => !!r).slice(0, 12),
+    rooms: enriched
+      .filter((r): r is HotRoom => !!r)
+      .map((r) => ({ ...r, heat: r.trades + Math.min(r.newListings, 20) * 2 + r.chatMessages * 2 + r.chatMembers * 5 }))
+      .sort((x, y) => y.heat - x.heat)
+      .slice(0, 12),
     ticker: ticker.slice(0, 30),
     usdPerBsv: usd,
     updatedAt: new Date().toISOString(),
@@ -160,7 +169,7 @@ const sharedBoard = unstable_cache(
     if (degraded(b)) throw new Error("degraded hot board");
     return b;
   },
-  ["hot-board-v3"],
+  ["hot-board-v4"],
   { revalidate: 60 },
 );
 

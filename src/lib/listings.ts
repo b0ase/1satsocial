@@ -1,7 +1,8 @@
-// Marketplace activity from 1sat-stack's market API (/market/listings: active listings and sales). Items are mapped
-// to their collection via the listing's origin (ORDFS metadata, cached: immutable). The market index doesn't hold
-// its full history yet (it's being backfilled), but its API shape is stable, so we build on it as-is.
-// BSV-21 listings per token come from the token overlay instead (see market.ts).
+// Marketplace activity from 1sat-stack.
+//  - Live listings: TXO search on the "ordlock" key (every unspent OrdLock listing, newest first). Items are mapped
+//    to their collection via their origin (ORDFS metadata, cached: immutable).
+//  - Sales: the market API (/market/listings?status=sale). Its history is still being backfilled; the shape is stable.
+//  - BSV-21: the overlay's active-token list; per-token listings come from the token overlay (see market.ts).
 import { parseRoom, type RoomKind } from "./room-ref";
 
 const ONESAT = process.env.ONESAT_API_URL || "https://api.1sat.app/1sat";
@@ -23,6 +24,7 @@ export type RecentListing = {
   priceSats: number;
   amount: string | null; // raw token units (BSV-21)
   name: string | null; // item name (collections)
+  origin: string | null; // item origin (collections), for its art
   height: number | null;
 };
 
@@ -34,25 +36,34 @@ export async function search(params: Record<string, string | string[]>): Promise
   return ((await res.json()) as SearchRow[] | null) ?? [];
 }
 
-type OrdfsMeta = { map?: { name?: string; subType?: string; subTypeData?: string | { collectionId?: string } } };
+type OrdfsMeta = { origin?: string; contentType?: string; map?: { name?: string; subType?: string; subTypeData?: string | { collectionId?: string } } };
+type ItemInfo = { id: string; name: string | null; origin: string; image: boolean };
 
 const g = globalThis as unknown as {
-  __ssItemColl?: Map<string, { id: string; name: string | null } | null>;
+  __ssItemColl?: Map<string, ItemInfo | null>;
   __ssRecent?: Map<string, { value: RecentListing[]; expires: number }>;
 };
 const itemColl = (g.__ssItemColl ??= new Map());
 
 /** Collection (and item name) of the inscription at this outpoint, from its origin. */
-async function itemCollection(outpoint: string): Promise<{ id: string; name: string | null } | null> {
+export async function itemCollection(outpoint: string): Promise<ItemInfo | null> {
   if (itemColl.has(outpoint)) return itemColl.get(outpoint)!;
-  let value: { id: string; name: string | null } | null = null;
+  let value: ItemInfo | null = null;
   try {
     const res = await fetch(`${ONESAT}/ordfs/metadata/${outpoint.replace("_", ".")}:-2`, { signal: AbortSignal.timeout(10_000), cache: "no-store" });
     if (res.ok) {
-      const m = ((await res.json()) as OrdfsMeta).map;
+      const meta = (await res.json()) as OrdfsMeta;
+      const m = meta.map;
       let std = m?.subTypeData;
       if (typeof std === "string") std = JSON.parse(std) as { collectionId?: string };
-      if (m?.subType === "collectionItem" && std?.collectionId) value = { id: std.collectionId, name: m.name ?? null };
+      if (m?.subType === "collectionItem" && std?.collectionId) {
+        value = {
+          id: std.collectionId,
+          name: m.name ?? null,
+          origin: (meta.origin ?? outpoint).replace(".", "_"),
+          image: !!meta.contentType?.startsWith("image/"),
+        };
+      }
     } else if (res.status !== 404) {
       return null; // transient: don't cache
     }
@@ -85,29 +96,73 @@ type MarketRow = {
 
 const recentCache = (g.__ssRecent ??= new Map());
 
-/** Newest listings ("active") or sales ("sale") on the market, mapped to collection rooms. Cached 60s. */
-export async function recentListings(status: "active" | "sale" = "active"): Promise<RecentListing[]> {
-  const hit = recentCache.get(status);
-  if (hit && hit.expires > Date.now()) return hit.value;
-  const res = await fetch(`${ONESAT}/market/listings?status=${status}&limit=100`, { signal: AbortSignal.timeout(20_000), cache: "no-store" });
+// Scores are block heights (with a fractional index) once mined, or unix times while unconfirmed.
+const heightOf = (score?: number) => (score && score < 1e8 ? Math.floor(score) : null);
+
+async function liveListings(): Promise<RecentListing[]> {
+  const rows = await search({ key: "ordlock", rev: "true", unspent: "true", limit: "300", tags: "bsv21,ordlock" });
+  const mapped = await mapLimit(rows, 8, async (r): Promise<RecentListing | null> => {
+    const outpoint = r.outpoint.replace(".", "_");
+    const priceSats = r.data?.ordlock?.price ?? 0;
+    if (!priceSats) return null;
+    const token = r.data?.bsv21;
+    if (token?.id && token.amt) {
+      const ref = parseRoom("bsv21", token.id);
+      return ref ? { event: "listed", outpoint, kind: "bsv21", id: ref.id, priceSats, amount: token.amt, name: null, origin: null, height: heightOf(r.score) } : null;
+    }
+    const item = await itemCollection(outpoint);
+    const ref = item ? parseRoom("coll", item.id) : null;
+    return ref && item
+      ? { event: "listed", outpoint, kind: "coll", id: ref.id, priceSats, amount: null, name: item.name, origin: item.image ? item.origin : null, height: heightOf(r.score) }
+      : null;
+  });
+  return mapped.filter((l): l is RecentListing => !!l);
+}
+
+async function sales(): Promise<RecentListing[]> {
+  const res = await fetch(`${ONESAT}/market/listings?status=sale&limit=100`, { signal: AbortSignal.timeout(20_000), cache: "no-store" });
   if (!res.ok) throw new Error(`1sat-stack market ${res.status}`);
   const rows = ((await res.json()) as MarketRow[] | null) ?? [];
   const mapped = await mapLimit(rows, 8, async (r): Promise<RecentListing | null> => {
     const lock = r.data?.ordlock;
     const origin = lock?.origin?.replace(".", "_");
     if (!lock?.price || !origin) return null;
-    const coll = await itemCollection(origin);
-    const ref = coll ? parseRoom("coll", coll.id) : null;
-    if (!ref) return null;
-    const when = status === "sale" ? lock.spend_score : r.score;
-    // Scores are block heights (with a fractional index) once mined, or unix times while unconfirmed.
-    const height = when && when < 1e8 ? Math.floor(when) : null;
-    return { event: status === "sale" ? "sold" : "listed", outpoint: r.outpoint.replace(".", "_"), kind: "coll", id: ref.id, priceSats: lock.price, amount: null, name: lock.name ?? coll!.name, height };
+    const item = await itemCollection(origin);
+    const ref = item ? parseRoom("coll", item.id) : null;
+    return ref && item
+      ? { event: "sold", outpoint: r.outpoint.replace(".", "_"), kind: "coll", id: ref.id, priceSats: lock.price, amount: null, name: lock.name ?? item.name, origin: item.image ? item.origin : null, height: heightOf(lock.spend_score) }
+      : null;
   });
-  const value = mapped.filter((l): l is RecentListing => !!l);
+  return mapped.filter((l): l is RecentListing => !!l);
+}
+
+/** Newest live listings ("active") or sales ("sale"). Cached 60s. */
+export async function recentListings(status: "active" | "sale" = "active"): Promise<RecentListing[]> {
+  const hit = recentCache.get(status);
+  if (hit && hit.expires > Date.now()) return hit.value;
+  const value = status === "active" ? await liveListings() : await sales();
   recentCache.set(status, { value, expires: Date.now() + 60_000 });
   return value;
 }
+
+type OverlayToken = { token_id?: string; output_count?: number; is_active?: boolean; is_blacklisted?: boolean };
+
+/** The most-used active BSV-21 tokens in the 1Sat overlay (by indexed outputs). Cached 10 min. */
+export async function activeTokens(limit = 30): Promise<string[]> {
+  const hit = tokenCache.value;
+  if (hit && hit.expires > Date.now()) return hit.value.slice(0, limit);
+  const res = await fetch(`${ONESAT}/bsv21/tokens`, { signal: AbortSignal.timeout(20_000), cache: "no-store" });
+  if (!res.ok) throw new Error(`1sat-stack tokens ${res.status}`);
+  const rows = ((await res.json()) as OverlayToken[] | null) ?? [];
+  const value = rows
+    .filter((t) => t.token_id && t.is_active && !t.is_blacklisted)
+    .sort((a, b) => (b.output_count ?? 0) - (a.output_count ?? 0))
+    .map((t) => t.token_id!)
+    .filter((id) => !!parseRoom("bsv21", id));
+  tokenCache.value = { value, expires: Date.now() + 10 * 60_000 };
+  return value.slice(0, limit);
+}
+const tokenCache: { value?: { value: string[]; expires: number } } = {};
 
 export type Activity = { kind: RoomKind; id: string; listings: number };
 

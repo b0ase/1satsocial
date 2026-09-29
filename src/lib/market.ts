@@ -1,6 +1,7 @@
 // Marketplace data for rooms: cheapest live listings (buyable in-app) and floor prices.
 import { formatAmount, roomMeta } from "./indexer";
-import { search } from "./listings";
+import { artUrl } from "./content";
+import { recentListings, search } from "./listings";
 import type { RoomRef } from "./room-ref";
 
 export type Listing = {
@@ -35,6 +36,9 @@ export type RoomMarket = {
   floorLabel: string | null;
   /** Floor in sats: per whole token for fungible rooms, per item for collections. */
   floorSats: number | null;
+  /** Live listings found (before collapsing/limiting), and how many of them can be bought in-app. */
+  live: number;
+  buyableCount: number;
 };
 
 const g = globalThis as unknown as { __ssMarket?: Map<string, { value: RoomMarket; expires: number }> };
@@ -72,10 +76,33 @@ async function overlayValid(tokenId: string, outpoints: string[]): Promise<Set<s
 
 /** Live BSV-21 listings of a token, from 1sat-stack (token outputs intersected with OrdLock listings). */
 async function loadMarket(room: RoomRef, limit: number): Promise<RoomMarket> {
-  if (room.kind !== "bsv21") {
-    // Collection listings: 1sat-stack has no search by collection yet, and BSV-20 is retired. Link out instead.
-    return { listings: [], floorLabel: null, floorSats: null };
+  if (room.kind === "coll") {
+    // 1sat-stack can't search listings by collection yet, so use the collection's items among the newest live
+    // listings market-wide. Recent listings only, so the floor is "cheapest recent listing".
+    const meta = await roomMeta(room.kind, room.id);
+    const listings = (await recentListings("active"))
+      .filter((l) => l.kind === "coll" && l.id === room.id)
+      .map((l): Listing => ({
+        outpoint: l.outpoint,
+        priceSats: l.priceSats,
+        amount: null,
+        label: l.name ?? meta?.title ?? "Item",
+        image: artUrl(l.origin),
+        seller: "",
+        buyable: true,
+        chatOnly: false,
+        count: 1,
+      }))
+      .sort((a, b) => a.priceSats - b.priceSats);
+    return {
+      listings: listings.slice(0, limit),
+      floorLabel: listings[0] ? formatSats(listings[0].priceSats) : null,
+      floorSats: listings[0]?.priceSats ?? null,
+      live: listings.length,
+      buyableCount: listings.length,
+    };
   }
+  if (room.kind !== "bsv21") return { listings: [], floorLabel: null, floorSats: null, live: 0, buyableCount: 0 }; // BSV-20: retired
   const [rows, meta] = await Promise.all([
     search({ key: [`bsv21:${room.id}`, "ordlock"], join: "intersect", unspent: "true", rev: "true", limit: "100", tags: "bsv21,ordlock" }),
     roomMeta(room.kind, room.id),
@@ -108,6 +135,8 @@ async function loadMarket(room: RoomRef, limit: number): Promise<RoomMarket> {
     listings: picked,
     floorLabel: floor === null ? null : `${formatPerToken(floor)} / token`,
     floorSats: floor,
+    live: listings.length,
+    buyableCount: listings.filter((l) => l.buyable).length,
   };
 }
 
@@ -116,7 +145,7 @@ export async function roomMarket(room: RoomRef, limit = 8): Promise<RoomMarket> 
   const key = `${room.key}:${limit}`;
   const hit = cache.get(key);
   if (hit && hit.expires > Date.now()) return hit.value;
-  const value = await loadMarket(room, limit).catch((): RoomMarket => ({ listings: [], floorLabel: null, floorSats: null }));
+  const value = await loadMarket(room, limit).catch((): RoomMarket => ({ listings: [], floorLabel: null, floorSats: null, live: 0, buyableCount: 0 }));
   cache.set(key, { value, expires: Date.now() + 60_000 });
   return value;
 }
