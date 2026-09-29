@@ -33,6 +33,8 @@ function traced(wallet: WalletInterface, log: object[]): WalletInterface {
           inputs: (args?.inputs as { outpoint?: string }[] | undefined)?.map((i) => i.outpoint),
           spends: args?.spends ? Object.keys(args.spends as object) : undefined,
           options: args?.options,
+          labels: args?.labels,
+          inputShape: (args?.inputs as Record<string, unknown>[] | undefined)?.map((i) => Object.keys(i)),
           originator: rest[0],
         };
         log.push(entry);
@@ -103,6 +105,7 @@ const ERRORS: Record<string, string> = {
   "services-required-for-purchase": "Marketplace service unavailable. Try again.",
   "listing-check-failed:already-sold": "That listing has just been sold.",
   "listing-check-failed:not-a-listing": "That listing is no longer available.",
+  "module-left-signable-transaction": "Yours could not complete this purchase. It has been logged for debugging.",
 };
 
 function friendly(error: string) {
@@ -123,23 +126,29 @@ export async function buyListing(req: BuyRequest): Promise<string> {
     const base = new OneSatServices("main");
     const services = req.chatOnly && req.kind === "bsv21" ? indexerValidatedServices(base) : base;
     const ctx = createContext(traced(conn.wallet, calls), { services, chain: "main" });
-    let result: { txid?: string; error?: string };
-    try {
-      result =
-        req.kind === "coll"
-          ? await buyOrdinal.execute(ctx, { outpoint, ...fee })
+    const attempt = async (viaWalletModule: boolean): Promise<{ txid?: string; error?: string }> => {
+      const route = viaWalletModule ? { usePermissionModule: true, permissionScheme: req.kind === "coll" ? "1sat" : "bsv21" } as const : {};
+      try {
+        return req.kind === "coll"
+          ? await buyOrdinal.execute(ctx, { outpoint, ...fee, ...route })
           : req.kind === "bsv21" && req.amount
-            ? await buyBsv21.execute(ctx, {
-                tokenId: req.roomId,
-                outpoint,
-                amount: req.amount,
-                ...fee,
-              })
+            ? await buyBsv21.execute(ctx, { tokenId: req.roomId, outpoint, amount: req.amount, ...fee, ...route })
             : { error: "BSV-20 tick purchases aren't supported in-app yet" };
-    } catch (e) {
-      result = { error: e instanceof Error ? e.message : String(e) };
+      } catch (e) {
+        return { error: e instanceof Error ? e.message : String(e) };
+      }
+    };
+
+    // Default SDK route first. On Yours 5.1 an OrdLock v1 purchase can fail inside the wallet with
+    // "inputs[0].unlockScript parameter must be valid" even though the SDK's unlock verifies offline;
+    // in that case retry via the wallet's own 1Sat module, which builds the purchase itself.
+    let route = "sdk";
+    let result = await attempt(false);
+    if (result.error && /unlockScript parameter must be valid/i.test(result.error)) {
+      route = "wallet-module";
+      result = await attempt(true);
     }
-    report({ kind: "buy", provider: conn.provider, req, result: { txid: result.txid, error: result.error }, calls });
+    report({ kind: "buy", provider: conn.provider, route, req, result: { txid: result.txid, error: result.error }, calls });
     if (result.error || !result.txid) throw new Error(friendly(result.error ?? "Purchase failed"));
     return result.txid;
   }
