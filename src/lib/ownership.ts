@@ -3,16 +3,19 @@
 //   1. its locking script pays an address whose key the user just proved (signature at sign-in),
 //   2. it is unspent (1Sat API),
 //   3. it is the asset it claims to be: BSV-21 via the 1Sat overlay (GorillaPool as a labelled fallback for tokens
-//      the overlay hasn't indexed), collection items via their origin inscription's MAP data (ORDFS).
+//      the overlay hasn't indexed), collection items via their origin's MAP pointer to the collection (ORDFS) plus a
+//      Sigma signature from the same key as the collection's origin (so a copycat can't claim membership).
 import { Utils, type LockingScript } from "@bsv/sdk";
-import { loadTx, p2pkhAddress } from "./claim";
+import { Sigma } from "@1sat/templates";
+import { loadTx, p2pkhAddress } from "./chain";
 import { MAX_PROOF_OUTPUTS } from "./login-shared";
 import { parseRoom } from "./room-ref";
 
 const ONESAT = process.env.ONESAT_API_URL || "https://api.1sat.app/1sat";
 const GP = process.env.ORDINALS_API_URL || "https://ordinals.gorillapool.io/api";
 
-export type HoldingSource = "overlay" | "gorillapool" | "ordfs";
+// "sigma": collection item whose origin points at the collection and is signed by the collection's key.
+export type HoldingSource = "overlay" | "gorillapool" | "sigma";
 
 export type Holding = {
   room: string; // room key, e.g. "bsv21:<id>" or "coll:<id>"
@@ -77,7 +80,7 @@ export async function spentMany(outpoints: string[]): Promise<Map<string, boolea
 }
 
 /** BSV-21 inscription on an output: a transfer, or the deploy+mint output itself (whose id is its own outpoint). */
-function bsv21Data(script: LockingScript, outpoint: string): { id: string; amt: bigint } | null {
+export function bsv21Data(script: LockingScript, outpoint: string): { id: string; amt: bigint } | null {
   for (const chunk of script.chunks) {
     if (!chunk.data || chunk.data.length < 20 || chunk.data[0] !== 0x7b) continue; // '{'
     try {
@@ -92,7 +95,7 @@ function bsv21Data(script: LockingScript, outpoint: string): { id: string; amt: 
   return null;
 }
 
-async function bsv21Valid(tokenId: string, outpoint: string): Promise<HoldingSource | null> {
+export async function bsv21Valid(tokenId: string, outpoint: string): Promise<HoldingSource | null> {
   const overlay = await get(`${ONESAT}/bsv21/${tokenId}/outputs/${outpoint.replace("_", ".")}`).catch(() => null);
   if (overlay?.ok) return "overlay";
   // Not in the overlay (history never submitted there): accept GorillaPool's validation, labelled as such.
@@ -104,11 +107,11 @@ async function bsv21Valid(tokenId: string, outpoint: string): Promise<HoldingSou
 
 type OrdfsMeta = { map?: { subType?: string; subTypeData?: string | { collectionId?: string } }; origin?: string };
 
-async function collectionOf(outpoint: string): Promise<string | null> {
+async function collectionOf(outpoint: string): Promise<{ collectionId: string; origin: string } | null> {
   const res = await get(`${ONESAT}/ordfs/metadata/${outpoint.replace("_", ".")}:-2`).catch(() => null);
   if (!res?.ok) return null;
   const meta = (await res.json().catch(() => null)) as OrdfsMeta | null;
-  if (meta?.map?.subType !== "collectionItem") return null;
+  if (meta?.map?.subType !== "collectionItem" || !meta.origin) return null;
   let std = meta.map.subTypeData;
   if (typeof std === "string") {
     try {
@@ -117,7 +120,57 @@ async function collectionOf(outpoint: string): Promise<string | null> {
       return null;
     }
   }
-  return std?.collectionId ?? null;
+  return std?.collectionId ? { collectionId: std.collectionId, origin: meta.origin.replace(".", "_") } : null;
+}
+
+const sg = globalThis as unknown as { __ssSigners?: Map<string, string[]> };
+const signerCache = (sg.__ssSigners ??= new Map());
+
+/** Addresses with a valid Sigma signature on an inscription's origin output. Origins are immutable, so cached. */
+async function sigmaSigners(origin: string): Promise<string[] | null> {
+  const hit = signerCache.get(origin);
+  if (hit) return hit;
+  const [txid, v] = origin.split("_");
+  const tx = await loadTx(txid);
+  const out = tx?.outputs[Number(v)];
+  if (!tx || !out) return null; // unknown, not "unsigned"
+  const addrs: string[] = [];
+  try {
+    const sigs = Sigma.parseFromScript(out.lockingScript, Number(v));
+    sigs.forEach((s, i) => {
+      try {
+        if (Sigma.verifyTransaction(tx, Number(v), i)) addrs.push(s.address);
+      } catch {
+        /* invalid signature */
+      }
+    });
+  } catch {
+    /* no SIGMA section */
+  }
+  signerCache.set(origin, addrs);
+  return addrs;
+}
+
+/** Is this outpoint the origin of a collection inscription (MAP subType "collection")? */
+async function isCollection(collectionId: string): Promise<boolean> {
+  const res = await get(`${ONESAT}/ordfs/metadata/${collectionId.replace("_", ".")}:-2`).catch(() => null);
+  if (!res?.ok) return false;
+  const meta = (await res.json().catch(() => null)) as OrdfsMeta | null;
+  return meta?.map?.subType === "collection";
+}
+
+/**
+ * Which collection is this 1-sat output a member of? The 1Sat rule: the item's origin MAP data points at the
+ * collection's origin (subTypeData.collectionId), and both origins carry a valid Sigma signature from the same key.
+ * Unsigned items or collections can't prove membership, so they don't count.
+ */
+export async function collectionMember(outpoint: string): Promise<{ collectionId: string; source: HoldingSource } | null> {
+  const item = await collectionOf(outpoint);
+  if (!item) return null;
+  const collectionId = item.collectionId.replace(".", "_");
+  const [collSigners, itemSigners, isColl] = await Promise.all([sigmaSigners(collectionId), sigmaSigners(item.origin), isCollection(collectionId)]);
+  if (!isColl || !collSigners?.length || !itemSigners?.some((a) => collSigners.includes(a))) return null;
+  return { collectionId, source: "sigma" };
 }
 
 async function mapLimit<T, R>(items: T[], limit: number, fn: (t: T) => Promise<R>): Promise<R[]> {
@@ -166,9 +219,9 @@ export async function verifyOutputs(addresses: string[], outpoints: string[]): P
       return room && source ? { room: room.key, outpoint, amount: token.amt.toString(), source } : null;
     }
     if (output.satoshis === 1) {
-      const collectionId = await collectionOf(outpoint);
-      const room = collectionId ? parseRoom("coll", collectionId) : null;
-      return room ? { room: room.key, outpoint, amount: "1", source: "ordfs" } : null;
+      const member = await collectionMember(outpoint);
+      const room = member ? parseRoom("coll", member.collectionId) : null;
+      return room && member ? { room: room.key, outpoint, amount: "1", source: member.source } : null;
     }
     return null;
   });
