@@ -1,6 +1,6 @@
 # Draft issue for HandCash (BRC-100 wallet, beta)
 
-> Sent to Brandon (HandCash) on Discord, who asked us to "submit an issue and I'll correct it soon". If he'd rather
+> For Brandon (HandCash), via Discord. He asked us to "submit an issue and I'll correct it soon". If he'd rather
 > track it on GitHub: https://github.com/HandCash/HANDCASH-DESKTOP/issues
 
 **Title:** How should a third-party app prove a user controls a 1Sat item / BSV-21 output held in the HandCash BRC-100 wallet?
