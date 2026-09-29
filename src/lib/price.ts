@@ -46,9 +46,13 @@ export async function bsvUsd(): Promise<number | null> {
   return g.__ssPrice?.usd ?? null; // stale beats nothing
 }
 
-/** "$4.19", "$0.02", "<$0.01" */
+/** "$4.19", "$0.02", "$0.0035" (two significant figures below a cent), "<$0.000001" */
 export function formatUsd(sats: number, usdPerBsv: number): string {
   const usd = (sats / 1e8) * usdPerBsv;
-  if (usd > 0 && usd < 0.01) return "<$0.01";
+  if (usd > 0 && usd < 0.000001) return "<$0.000001";
+  if (usd > 0 && usd < 0.01) {
+    const fixed = Number(usd.toPrecision(2)).toFixed(Math.min(6, 1 - Math.floor(Math.log10(usd))));
+    return `$${fixed.replace(/0+$/, "").replace(/\.$/, "")}`;
+  }
   return usd.toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: usd >= 100 ? 0 : 2 });
 }

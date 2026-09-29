@@ -161,7 +161,7 @@ type OrdSale = { origin?: { data?: { map?: { subTypeData?: { collectionId?: stri
 
 /** Most-traded tokens and collections across recent 1sat.market sales. Cached 10 min. */
 export function trending(limit = 9): Promise<{ tokens: Trending[]; collections: Trending[] }> {
-  return cached(`trending:${limit}`, 10 * 60_000, async () => {
+  return cached(`trending:${limit}`, 2 * 60_000, async () => {
     const pages = [0, 200];
     const [tokenPages, ordPages] = await Promise.all([
       Promise.all(pages.map((o) => gp<TokenSale[]>(`/bsv20/market/sales?limit=200&offset=${o}&dir=desc`).catch(() => []))),

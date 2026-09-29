@@ -32,7 +32,12 @@ function collapse(listings: Listing[]): Listing[] {
   return out;
 }
 
-export type RoomMarket = { listings: Listing[]; floorLabel: string | null };
+export type RoomMarket = {
+  listings: Listing[];
+  floorLabel: string | null;
+  /** Floor in sats: per whole token for fungible rooms, per item for collections. */
+  floorSats: number | null;
+};
 
 const g = globalThis as unknown as { __ssMarket?: Map<string, { value: RoomMarket; expires: number }> };
 const cache = (g.__ssMarket ??= new Map());
@@ -111,6 +116,7 @@ async function loadMarket(room: RoomRef, limit: number): Promise<RoomMarket> {
     return {
       listings: picked,
       floorLabel: floor === null ? null : `${formatPerToken(floor)} / token`,
+      floorSats: floor,
     };
   }
 
@@ -136,7 +142,11 @@ async function loadMarket(room: RoomRef, limit: number): Promise<RoomMarket> {
       }),
     )
     .sort((a, b) => a.priceSats - b.priceSats);
-  return { listings, floorLabel: listings[0] ? formatSats(listings[0].priceSats) : null };
+  return {
+    listings,
+    floorLabel: listings[0] ? formatSats(listings[0].priceSats) : null,
+    floorSats: listings[0]?.priceSats ?? null,
+  };
 }
 
 /** Cheapest listings for a room. Cached 60s. */
@@ -144,7 +154,7 @@ export async function roomMarket(room: RoomRef, limit = 8): Promise<RoomMarket> 
   const key = `${room.key}:${limit}`;
   const hit = cache.get(key);
   if (hit && hit.expires > Date.now()) return hit.value;
-  const value = await loadMarket(room, limit).catch(() => ({ listings: [], floorLabel: null }));
+  const value = await loadMarket(room, limit).catch((): RoomMarket => ({ listings: [], floorLabel: null, floorSats: null }));
   cache.set(key, { value, expires: Date.now() + 60_000 });
   return value;
 }
